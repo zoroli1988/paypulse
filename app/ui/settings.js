@@ -878,9 +878,12 @@
      验签 → 比版本。网络请求在前端（fetch，WebView2 自带 HTTP 栈），
      验签和版本比较在 Rust（update.rs），前端只负责展示。
 
-     清单地址：GitHub Releases 里放的 manifest 文件，走 raw 域名。
-     这个 URL 是**配置项**，等真正发版时换成你的仓库地址。 */
-  var UPDATE_MANIFEST_URL = "https://raw.githubusercontent.com/bydota/paypulse/main/update/manifest-stable-win-x64.json";
+     清单地址：GitHub Releases 里放的 manifest 文件。
+     后端 release.yml 现在只发一份 manifest（channel=stable），
+     所以稳定版/测试版暂时都指向同一个 `latest/download/manifest.json`。
+     等以后真的分通道（beta manifest 单独发），再把 beta 的 URL 换成
+     对应的资产名。 */
+  var UPDATE_MANIFEST_URL = "https://github.com/zoroli1988/paypulse/releases/latest/download/manifest.json";
 
   function updShow(html) {
     if (el.updBody) el.updBody.innerHTML = html;
@@ -958,9 +961,9 @@
       var seq = [350, 700, 1050];
       seq.forEach(function (t, i) { setTimeout(function () { tickSteps(i + 1); }, t); });
 
-      // 通道映射到清单文件的后缀（稳定版 / 测试版）
-      var chan = el.updChan && el.updChan.value === "测试版" ? "beta" : "stable";
-      var url = UPDATE_MANIFEST_URL.replace("stable", chan);
+      // 通道目前只发一份 manifest（后端 release.yml 里 channel=stable），
+      // 稳定版/测试版走同一个地址；等 beta 分开发时再按通道拼 URL。
+      var url = UPDATE_MANIFEST_URL;
 
       fetch(url, { cache: "no-store" })
         .then(function (resp) {
