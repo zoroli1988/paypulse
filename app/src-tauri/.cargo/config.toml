@@ -3,5 +3,8 @@
 linker = "rust-lld"
 rustflags = ["-C", "link-self-contained=yes"]
 
-[build]
-target = "x86_64-pc-windows-gnu"
+# 注意：这里不写全局 [build] target = "x86_64-pc-windows-gnu"。
+# 一旦写了，它在 macOS / Linux 上也会生效，导致那边尝试交叉编译
+# x86_64-pc-windows-gnu 而报「can't find crate for core」（std 没装）。
+# Windows 侧的 target 由 CI 通过 `--target x86_64-pc-windows-gnu` 显式指定，
+# 本地开发机用 `cargo build --target x86_64-pc-windows-gnu` 或靠环境变量。

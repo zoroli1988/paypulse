@@ -34,17 +34,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-pc-windows-gnu
-
-      # GNU binutils 补丁（见 app/README.md 3.2）
-      - name: 获取 GNU binutils
-        shell: bash
-        run: |
-          V=mingw-w64-x86_64-binutils-2.44-4-any.pkg.tar.zst
-          curl -sL -o /tmp/bu.zst "https://mirror.msys2.org/mingw/mingw64/$V"
-          mkdir -p app/tools/genv/bin /tmp/bu
-          tar -xf /tmp/bu.zst -C /tmp/bu
-          cp /tmp/bu/mingw64/bin/{as,dlltool,windres,windmc}.exe app/tools/genv/bin/
+          targets: x86_64-pc-windows-msvc
 
       - uses: actions/setup-node@v4
         with:
@@ -55,9 +45,7 @@ jobs:
 
       - name: 编译安装包（NSIS）
         shell: bash
-        run: |
-          export PATH="$PWD/app/tools/genv/bin:$PATH"
-          cd app && npx tauri build
+        run: cd app && npx tauri build
 
       - name: 上传安装包到 Releases
         uses: softprops/action-gh-release@v2
