@@ -123,15 +123,29 @@ jobs:
       - name: 生成 manifest.json
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          EXE=$(ls *.exe | head -1)
+          # 下载器把 exe 落在工作目录根，用绝对路径避免 cd 后相对路径错位
+          EXE=$(ls "$GITHUB_WORKSPACE"/*.exe | head -1)
           cd app/tools/make-manifest
           cargo run --release -- \
             --version "$VERSION" \
             --channel stable \
             --priv "$UPDATE_SIGNING_KEY" \
-            --pkg windows-x64 "../../../../$EXE" \
+            --pkg windows-x64 "$EXE" \
             --out manifest.json
-          # 替换本地路径为 Release 下载 URL（需按仓库地址拼）
+          # make-manifest 把 url 写成本地路径，这里替换成真实 Release 下载地址
+          python3 - "$VERSION" "$EXE" <<'PY'
+          import json, sys, os
+          ver = sys.argv[1]
+          exe = os.path.basename(sys.argv[2])
+          with open("manifest.json", encoding="utf-8") as f:
+              m = json.load(f)
+          base = f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/releases/download/v{ver}"
+          for pkg in m.get("packages", {}).values():
+              pkg["url"] = f"{base}/{exe}"
+          with open("manifest.json", "w", encoding="utf-8") as f:
+              json.dump(m, f, ensure_ascii=False, indent=2)
+          print("manifest url 已替换为:", base + "/" + exe)
+          PY
           echo "manifest 已生成"
 
       - name: 上传 manifest 到 Releases
