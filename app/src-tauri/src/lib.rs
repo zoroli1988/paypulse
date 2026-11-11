@@ -1282,7 +1282,12 @@ pub(crate) fn apply_width(win: &tauri::WebviewWindow, size: Size) {
 fn clamp_into_screen(win: &tauri::WebviewWindow) {
     let Ok(pos) = win.outer_position() else { return };
     let Ok(size) = win.outer_size() else { return };
+    // `hwnd()` 是 Windows 专属方法，macOS/Linux 没有。平台层的 work_area
+    // 在 macOS/Linux 上忽略 hwnd（回退到 current_monitor），所以传 0 即可。
+    #[cfg(target_os = "windows")]
     let hwnd = win.hwnd().map(|h| h.0 as isize).unwrap_or(0);
+    #[cfg(not(target_os = "windows"))]
+    let hwnd: isize = 0;
 
     let area = platform::work_area(hwnd).or_else(|| {
         let mon = win.current_monitor().ok().flatten()?;
@@ -1570,7 +1575,10 @@ fn snap_to_edge(win: &tauri::WebviewWindow, threshold: u32) {
     if threshold == 0 || SNAPPING.swap(true, std::sync::atomic::Ordering::SeqCst) {
         return;
     }
+    #[cfg(target_os = "windows")]
     let hwnd = win.hwnd().map(|h| h.0 as isize).unwrap_or(0);
+    #[cfg(not(target_os = "windows"))]
+    let hwnd: isize = 0;
     let Ok(pos) = win.outer_position() else {
         SNAPPING.store(false, std::sync::atomic::Ordering::SeqCst);
         return;

@@ -16,6 +16,10 @@ on:
     tags:
       - 'v*'
 
+# GITHUB_TOKEN 默认只读，创建/上传 Release 需要显式给 contents 写权限。
+permissions:
+  contents: write
+
 env:
   CARGO_TERM_COLOR: always
 
