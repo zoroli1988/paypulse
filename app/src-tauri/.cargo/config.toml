@@ -1,0 +1,7 @@
+[target.x86_64-pc-windows-gnu]
+# 不依赖外部 MinGW：用 rustc 自带的 lld + self-contained 的 crt/库链接
+linker = "rust-lld"
+rustflags = ["-C", "link-self-contained=yes"]
+
+[build]
+target = "x86_64-pc-windows-gnu"

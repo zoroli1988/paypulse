@@ -1,0 +1,26 @@
+# Rust 构建产物。
+# 每个 crate 各有自己的 target/，而 app/.gitignore 只兜得住 app/ 那一份，
+# paypulse-core 和 paypulse-clock 一直没写忽略规则——在这里统一兜住，
+# 否则一次 `git add -A` 就会把 80MB 的 .rlib / .pdb 一起提交。
+target/
+**/target/
+
+# GNU binutils 构建补丁（as / dlltool / windres / windmc / gcc 替身）。
+# 这些是 msys2 的 GPL 二进制，不进仓库——README 第三节写了从 msys2 获取的
+# 命令，as-shim 的 gcc 替身也能从源码编译。
+app/tools/genv/bin/
+
+# 临时验证脚本与截图（tmp/ 下都是“随时可重跑”的工装，不是源码）
+/tmp/
+
+# WebView 运行时吐出来的 crashpad 噪音，不是项目文件
+debug.log
+
+# 工具侧的项目笔记（.workbuddy/）。里面有薪资讨论与内部取舍，
+# 而 app/ 是 AGPL 公开仓——这两类东西不该混在一个历史里。
+/.workbuddy/
+
+# 系统
+.DS_Store
+Thumbs.db
+desktop.ini

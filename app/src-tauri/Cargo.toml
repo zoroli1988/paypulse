@@ -1,0 +1,69 @@
+[package]
+name = "paypulse-app"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.77"
+description = "牛马薪动了！ · 桌面实时薪资悬浮窗"
+authors = ["BYDOTA"]
+
+[lib]
+name = "paypulse_app"
+# 只要 rlib。Tauri 模板原本写的是 ["staticlib", "cdylib", "rlib"]，
+# 那两个是给 iOS / Android 用的；桌面端编 cdylib 时 rustc 会把所有符号
+# 都放进 PE 导出表，windows-gnu 下直接撞上限：
+#   rust-lld: error: too many exported symbols (got 91856, max 65535)
+crate-type = ["rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# 引擎闭源仓：以 git submodule 形式挂在主仓根目录的 paypulse-core/ 下，
+# 此处用相对 path 引用。没有私有仓权限的人 clone 主仓后这个 path 是空的，
+# 编译会在此处报「找不到 paypulse-core」——外壳与时钟库仍可独立阅读。
+paypulse-core = { path = "../../paypulse-core" }
+# 时钟换算单独成 crate，因为它最容易算错且有完整单测
+paypulse-clock = { path = "../../paypulse-clock" }
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# 只用本地时钟与日期，不引 tokio/chrono 的全量特性
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+ed25519-dalek = { version = "2", default-features = false, features = ["std", "alloc"] }
+sha2 = { version = "0.10", default-features = false }
+
+# 开机自启（注册表）、空闲检测、全局快捷键都写在 platform.rs 里，
+# 用七个手写的 extern 直接链 user32 / advapi32 —— 不引 windows-sys。
+#
+# 不引的理由不是「省依赖」，是它根本编不过：windows-sys 0.60 起改用 raw-dylib，
+# 编译期要调 dlltool，而 rustup 的 x86_64-pc-windows-gnu 工具链只带 rust-lld，
+# 不带 binutils。引进来 = `cargo build` 直接失败。
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+opt-level = "s"
+strip = "symbols"
+panic = "unwind"
+
+# 这个空表是刻意的，别删。
+#
+# 这张表必须存在，但**填什么都没用**——真话是这两句：
+#
+# 1. 它存在的唯一目的是消一条噪音。`tauri-winres` 生成 VERSIONINFO 前会来这里
+#    找属性，找不到就 `println!` 一句 "package.metadata does not exist"。那句走
+#    的是构建脚本的 **stdout**，而 cargo 把构建脚本 stdout 里所有非 `cargo:`
+#    开头的行一律算成告警，于是每次编译都多一条「build script generated 1
+#    warning」，正文还看不见。它在 `bundle.active = false` 时从不出现（那时不
+#    需要版本资源，这段代码不跑），一旦打开打包就冒出来。
+#
+# 2. 往里写 CompanyName / FileDescription 不会生效，写了反而误导下一个人：
+#    `tauri-winres` 是在 `WindowsResource::new()` 里读这张表的，而
+#    `tauri-build` 随后用 `set()` 把 CompanyName（取 bundle.publisher）和
+#    FileDescription（取 productName）覆盖了一遍，`compile()` 才真正落盘。
+#    实测把 FileDescription 写成中文，产物里仍是 `paypulse`。
+#
+# 所以想改那两个字段，改的是 tauri.conf.json 的 publisher / productName，
+# 不是这里。productName 保持英文小写是刻意的：它同时决定 exe 名、安装目录名
+# 和开始菜单项，中文会让路径带上多字节字符。
+[package.metadata.tauri-winres]

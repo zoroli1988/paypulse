@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "detail",
+  "description": "今日明细窗：只调 detail_view / close_detail / get_settings，不给窗口操作权限",
+  "windows": ["detail"],
+  "permissions": [
+    "core:default",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten"
+  ]
+}

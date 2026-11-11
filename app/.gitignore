@@ -1,0 +1,23 @@
+# Rust
+/src-tauri/target/
+/src-tauri/gen/
+
+# Node
+/node_modules/
+
+# 本地数据（任何含薪资的快照、临时库都不许进仓）
+*.db
+*.db-journal
+*.sqlite
+/scratch/
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# 本机补装的 binutils（GNU as），只为构建；见 tools/genv
+/tools/genv/
+/tools/as-shim/target/
+
+# UI 自检截图的产物，随时可重跑
+/tools/ui-probe/out/

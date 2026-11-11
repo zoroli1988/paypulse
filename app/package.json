@@ -1,0 +1,14 @@
+{
+  "name": "paypulse",
+  "private": true,
+  "version": "0.1.0",
+  "description": "牛马薪动了！ · 桌面实时薪资悬浮窗",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "build:no-bundle": "tauri build --no-bundle"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

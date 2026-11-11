@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "hudmenu",
+  "description": "悬浮窗右键自绘菜单：只调 menu_state / menu_action / menu_close / get_settings，不给窗口操作权限",
+  "windows": ["hudmenu"],
+  "permissions": [
+    "core:default",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten"
+  ]
+}

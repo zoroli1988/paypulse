@@ -1,0 +1,13 @@
+[package]
+name = "as-shim"
+version = "0.1.0"
+edition = "2021"
+description = "把 dlltool 传给汇编器的参数转给 MinGW gcc，滤掉它不认识的 --64"
+
+[[bin]]
+name = "as"
+path = "src/main.rs"
+
+[[bin]]
+name = "gcc"
+path = "src/gcc.rs"

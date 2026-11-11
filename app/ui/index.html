@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>牛马薪动了！</title>
+<link rel="stylesheet" href="hud.css" />
+</head>
+<body>
+  <!-- 整个窗口是透明的，只有 .hud 这一块有背景。
+       结构和类名严格照 paypulse-prototype.html 的 #hud：
+       head → amount → metrics → prog-row → bar → foot → shadow → tip → actions。
+       顺序不能改，改了间距就不对（原型稿的 242px 高度是按这个顺序堆出来的）。 -->
+  <div class="hud size-normal" id="hud" data-state="on" data-tauri-drag-region>
+
+    <div class="hud-head" data-tauri-drag-region>
+      <span class="hud-label">今日已赚</span>
+      <span class="badge"><i class="dot"></i><span id="stateLabel">在岗</span></span>
+    </div>
+
+    <div class="hud-amount" data-tauri-drag-region><span class="cur">¥</span><span id="amount">0.000</span></div>
+
+    <!-- 三列的「表头」和数值都要能被换掉：请假态显示的是 类型 / 剩余 / 本月，
+         不是 每秒 / 时薪 / 日薪。换字在 JS 里，值仍然全部来自 Rust。 -->
+    <div class="hud-metrics" data-tauri-drag-region>
+      <div class="m"><span class="k" id="k1">每秒进账</span><b class="v" id="perSec">¥0.0136</b></div>
+      <div class="m"><span class="k" id="k2">时薪</span><b class="v" id="hourly">¥49.04</b></div>
+      <div class="m"><span class="k" id="k3">日薪</span><b class="v" id="daily">¥367.82</b></div>
+    </div>
+
+    <div class="hud-prog-row" data-tauri-drag-region>
+      <span>已工作 <b id="worked">00:00:00</b></span>
+      <span class="pct" id="pct">0%</span>
+      <!-- 右槽随状态换语义：距下班 / 午休剩余 / 已白干 -->
+      <span><span id="remainLabel">距下班</span> <b id="remain">09:00:00</b></span>
+    </div>
+
+    <div class="bar" data-tauri-drag-region><i id="barFill"></i></div>
+
+    <div class="hud-foot" data-tauri-drag-region>
+      <span>本月已赚 <b id="monthEarn">¥0.00</b></span>
+      <span>本月还剩 <b id="monthLeft">0</b> 个工作日</span>
+    </div>
+
+    <!-- 白干条：义务加班时出现；结束加班后只要当天有记录就保留 -->
+    <div class="hud-shadow" id="shadowRow"
+         title="午休加班按 1× 时薪折算；下班后义务加班按 1.5× 折算。只作对照，不计入月薪、不进月报。">
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#FFB020" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M6 18L18 6"/></svg>
+      <span>今日白干</span>
+      <b id="shadowAmt">¥0.00</b>
+      <span class="hs-note">不计入月薪</span>
+    </div>
+
+    <div class="hud-tip" id="tip" data-tauri-drag-region>打卡成功，先稳住</div>
+
+    <!-- 快捷动作：午休中 / 已下班 → 我在加班；加班中 → 结束加班；其余状态不显示 -->
+    <div class="hud-actions">
+      <button class="hud-act primary" id="actStart" title="午休或下班后仍在干活，点一下开始记白干账">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+        <span id="actStartTxt">我在加班</span>
+      </button>
+      <button class="hud-act" id="actStop" title="结束加班，回到当前时间对应的状态">
+        <svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2.5"/></svg>
+        <span id="actStopTxt">结束加班</span>
+      </button>
+    </div>
+
+    <!-- 展开态才有的一块：把今天的钱折成奶茶（原型 #hud 的 .hud-expand）。
+         只在 322px 那一档显示，标准态和紧凑态都不留占位。
+         四个数字全部来自 Rust：折合几杯也是除法，不该写在 JS 里。 -->
+    <div class="hud-expand">
+      <div class="eq-row">
+        <span>已赚 ≈ <span id="eqName">奶茶</span> <b id="eqCups">0.0 杯</b></span>
+        <span>目标 <span id="eqGoal">1,000</span> 杯</span>
+      </div>
+      <div class="eq-bar"><i id="eqGoalBar"></i></div>
+      <div class="eq-row">
+        <span>距下班还能买 <b id="eqLeft">0.0 杯</b></span>
+        <span>今日目标 <span id="eqDay">12</span> 杯</span>
+      </div>
+      <div class="eq-bar"><i id="eqDayBar"></i></div>
+    </div>
+
+    <!-- 鼠标穿透：原型稿里没有这个按钮（它是设置页的一项），
+         所以只在鼠标悬停时浮出来，静置时的版面与原型稿完全一致。 -->
+    <button class="thru" id="thruBtn" title="鼠标穿透：开启后点击会落到下面的窗口（用托盘菜单关掉）">◎</button>
+
+    <!-- 休息日遮罩：一个数字都不给 -->
+    <div class="rest" id="restMask" hidden>
+      <div class="rt">今天休息</div>
+      <div class="rd">未计薪。休息日打开它也不会虚增金额。</div>
+    </div>
+  </div>
+
+  <script src="hud.js"></script>
+</body>
+</html>

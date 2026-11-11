@@ -1,0 +1,796 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>设置 · 牛马薪动了！</title>
+<link rel="stylesheet" href="settings.css" />
+</head>
+<body>
+<!-- 结构和分组照 paypulse-prototype.html 04 章：左侧七个分组，右侧真控件，没有「保存」。
+     标了 todo 的行是这一版刻意没做的功能——它们照原型的位置摆着，但控件是灰的、
+     右边写着「待接入」，并在说明里写清为什么。给一个点了没反应的开关，比不给更让人火大。 -->
+<div class="app">
+  <div class="bar" data-tauri-drag-region>
+    <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+    <span class="bt">设置 · 牛马薪动了！</span>
+    <button class="x" id="closeBtn" title="关闭（Esc）">✕</button>
+  </div>
+
+  <div class="wrap">
+    <nav class="nav" id="nav">
+      <div class="i on" data-g="pay">薪资与口径</div>
+      <div class="i" data-g="schedule">作息与工作日</div>
+      <div class="i" data-g="look">外观与尺寸</div>
+      <div class="i" data-g="behavior">行为与快捷键</div>
+      <div class="i" data-g="notify">通知与文案</div>
+      <div class="i" data-g="privacy">数据与隐私</div>
+      <div class="i" data-g="about">关于</div>
+      <div class="foot">
+        <div>改完即生效，<b>没有保存按钮</b>。</div>
+        <div>历史记录永不重算。</div>
+      </div>
+    </nav>
+
+    <main class="body" id="body">
+
+      <!-- 首启引导：只在「配置文件还不存在」的那次启动出现（`first_run` 命令）。
+           它不挡操作——右边七组照样能点，只是多一条横幅。填完点「开始」就收起来，
+           那一刻悬浮窗才第一次露面。 -->
+      <div class="welcome" id="welcome" hidden>
+        <div class="w-l">
+          <div class="w-t">先填两个数，悬浮窗才会出来</div>
+          <div class="w-d">月薪、上下班时间——这两个不填，别的都没意义。现在里面是<b>示例的 8000</b>，换成你自己的数就好。</div>
+        </div>
+        <button class="w-go" id="welcomeGo">开始</button>
+      </div>
+
+      <!-- ========== 01 薪资与口径 ========== -->
+      <section class="pane on" data-g="pay">
+        <div class="pane-h">
+          <div>
+            <div class="h-t">薪资与口径</div>
+            <div class="h-d">决定「一分钱怎么算」。改动只影响今天及以后，历史记录永不重算——这是可信度的底线。</div>
+          </div>
+          <div class="h-r">GROUP 01 / 07</div>
+        </div>
+
+        <div class="set-row">
+          <div class="l">
+            <div class="t" id="fMonthLabel">月薪</div>
+            <div class="d">用于折算日薪与时薪。填你合同上那个数就行，单位是<b>元</b>，没有上限</div>
+          </div>
+          <div class="r" style="display:flex;align-items:center;gap:7px">
+            <input class="inp num" id="fMonth" type="number" step="0.01" min="1" />
+            <span style="font-size:12px;color:var(--muted);font-family:var(--mono)">元</span>
+          </div>
+        </div>
+
+        <div class="set-row">
+          <div class="l">
+            <div class="t">计薪天数</div>
+            <div class="d">法定 21.75 用于折算日薪 / 时薪；另外两个是有些公司的内部算法，<b>非法定</b></div>
+          </div>
+          <div class="r">
+            <select class="sel" id="fDays" style="min-width:236px">
+              <option value="2175">21.75 天（法定计薪天数）</option>
+              <option value="2100">21 天（当月实际工作日）</option>
+              <option value="2067">20.67 天（月均工作日）</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="set-row">
+          <div class="l">
+            <div class="t">每日计薪工时</div>
+            <div class="d">由「作息与工作日」自动推导，此处可手工覆盖。<b>这不是法定值</b>——法定日工时是 8 小时，填多少取决于你真实的作息</div>
+          </div>
+          <div class="r" style="display:flex;align-items:center;gap:7px">
+            <input class="inp num" id="fHours" type="number" step="0.5" min="0.5" max="24" style="width:82px" />
+            <span style="font-size:12px;color:var(--muted);font-family:var(--mono)">小时</span>
+          </div>
+        </div>
+
+        <div class="set-row">
+          <div class="l">
+            <div class="t">加班怎么算</div>
+            <div class="d">统一按 <b>1.5×</b> 折算，不区分星期几。法定还有 2×（休息日）、3×（法定节假日）两档，
+              <b>本工具不实现</b>——分档的前提是模型认「今天是什么日子」</div>
+          </div>
+          <div class="r">
+            <select class="sel" id="fOt" style="min-width:216px">
+              <option value="paid">按 1.5× 计入今日已赚</option>
+              <option value="shadow">不计加班费（仅记白干价值）</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="set-row">
+          <div class="l">
+            <div class="t">薪资口径（税前 / 税后）</div>
+            <div class="d">只决定界面怎么称呼你填的那个数，<b>不改变任何计算</b></div>
+          </div>
+          <div class="r">
+            <div class="seg2" id="grossSeg">
+              <button data-v="1">税前（应发）</button>
+              <button data-v="0">税后（到手）</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="blk">
+          <div class="blk-h">
+            <div class="blk-t">实时折算</div>
+            <div class="blk-d">改上面任何一项，这四行立刻变</div>
+          </div>
+          <div class="calc-out">
+            <span>日薪 <b id="dDaily">¥0.00</b></span>
+            <span>时薪 <b id="dHourly">¥0.00</b></span>
+            <span>每秒 <b id="dSec">¥0.0000</b></span>
+            <span>已工作 <b id="dSched">7.5 h</b></span>
+          </div>
+        </div>
+
+        <div class="blk amber" id="otBlk">
+          <div class="blk-t"><span class="dot" style="background:#FFB020"></span><span id="otTitle">当前：不计加班费</span></div>
+          <div class="blk-d" style="margin-top:6px" id="otDesc">
+            加班时段不计入月薪，但会单独折算一笔「白干价值」。这笔钱不占月薪、不进合计、不参与任何汇总。
+          </div>
+        </div>
+
+        <div class="blk violet">
+          <div class="blk-h">
+            <div class="blk-t"><span class="dot" style="background:#A78BFA"></span>请假<em style="font-family:var(--mono);font-size:9px;color:var(--muted);font-style:normal;letter-spacing:1px">LEAVE</em></div>
+            <div class="switch" id="swLeaveToday"></div>
+          </div>
+          <div class="blk-d" style="margin-bottom:10px">
+            请假当天不计薪：金额停在 0.000，状态转紫，月合计自动扣掉这一天。
+            右侧开关标的是<b>今天</b>——和托盘菜单里那个「今天请假」是同一个状态。
+          </div>
+          <div class="chips" id="leaveChips">
+            <span class="chip on" data-lk="年假">年假</span>
+            <span class="chip" data-lk="事假">事假</span>
+            <span class="chip" data-lk="病假">病假</span>
+          </div>
+          <div class="set-row" style="padding:12px 0 0;border-bottom:0">
+            <div class="l"><div class="t" style="font-size:12px">剩余额度（天）</div>
+              <div class="d">工具不会去猜你公司还剩几天，这个数由你自己维护</div>
+            </div>
+            <div class="r"><input class="inp num" id="fLeaveLeft" type="number" step="0.5" min="0" max="365" style="width:92px" /></div>
+          </div>
+        </div>
+
+        <!-- 年终奖摊分：原型 04 章那个紫色卡。只有「摊入 12 个月」才会改变时薪，
+             所以这一版不做「仅在发放月计入」那一档——那种口径下时薪一天都不变，
+             没有可算的东西，留着它只会让「为什么时薪没变」变成一个要解释的问题。 -->
+        <div class="blk violet">
+          <div class="blk-h">
+            <div class="blk-t"><span class="dot" style="background:#A78BFA"></span>年终奖摊分<em style="font-family:var(--mono);font-size:9px;color:var(--muted);font-style:normal;letter-spacing:1px">YEAR-END BONUS</em></div>
+          </div>
+          <div class="blk-d" style="margin-bottom:10px">
+            13 / 14 薪只是两个常见值，远不是全部：有人 12.5 薪，有人 15 薪再叠项目奖，有人干脆按年薪百分比发。
+            所以「年薪月数」这一栏是<b>自由输入</b>——填 3 个月就是 15 薪，填 0.5 就是 12.5 薪。
+            而且<b>只有摊入 12 个月才会改变时薪</b>，一次性发放不该让每天都虚高。
+          </div>
+          <div class="chips" id="bonusChips">
+            <span class="chip on" data-bm="none">不计入</span>
+            <span class="chip" data-bm="months">自定义 xx 薪</span>
+            <span class="chip" data-bm="amount">按金额（红包）</span>
+            <span class="chip" data-bm="rate">按年薪 %</span>
+          </div>
+          <div id="bonusFields" style="margin-top:11px"></div>
+          <div class="bonus-out" id="bonusOut"></div>
+        </div>
+
+        <div class="callout warn">
+          <b>中途改月薪，历史不跟着改。</b>已过去的每一天按当天的口径结算，
+          月合计是「各天之和」而不是「日薪 × 天数」——后者会在你每次调薪时把过去也一起改掉。
+        </div>
+      </section>
+
+      <!-- ========== 02 作息与工作日 ========== -->
+      <section class="pane" data-g="schedule">
+        <div class="pane-h">
+          <div>
+            <div class="h-t">作息与工作日</div>
+            <div class="h-d">这里决定「哪些时间是计薪的」。午休暂停、到点下班、加班识别全部建立在它上面。</div>
+          </div>
+          <div class="h-r">GROUP 02 / 07</div>
+        </div>
+
+        <div class="blk">
+          <div class="blk-h">
+            <div class="blk-t"><span class="dot" style="background:var(--green)"></span>排班形态</div>
+            <div class="blk-d">切换后自动改写下方排班，可再单独微调</div>
+          </div>
+          <div class="ws-grid" id="wsCards">
+            <div class="ws" data-w="five">
+              <div class="ws-n">双休</div>
+              <div class="ws-strip"><i></i><i></i><i></i><i></i><i></i><i class="r"></i><i class="r"></i></div>
+              <div class="ws-m">周 5 天 · 月出勤 20.67</div>
+            </div>
+            <div class="ws" data-w="bigsmall">
+              <div class="ws-n">大小周</div>
+              <div class="ws-strip"><i></i><i></i><i></i><i></i><i></i><i class="h"></i><i class="r"></i></div>
+              <div class="ws-m">单周 5 / 双周 6</div>
+            </div>
+            <div class="ws" data-w="six">
+              <div class="ws-n">单休</div>
+              <div class="ws-strip"><i></i><i></i><i></i><i></i><i></i><i></i><i class="r"></i></div>
+              <div class="ws-m">周 6 天 · 月出勤 26</div>
+            </div>
+            <!-- 原型这里是「弹性（按首次活动滚动）· 待接入」。现在它是可选的了，
+                 但形状仍是第四张卡：点它不是「选第四种形态」，而是「开 / 关」——
+                 它跟哪几天上班互不相干，双休的人也能弹性。 -->
+            <div class="ws" data-w="flex">
+              <div class="ws-n">弹性</div>
+              <div class="ws-strip"><i class="h"></i><i class="h"></i><i class="h"></i><i class="h"></i><i class="h"></i><i class="h"></i><i class="h"></i></div>
+              <div class="ws-m">按首次活动 · 已关闭</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="blk">
+          <div class="blk-h">
+            <div class="blk-t">每周排班</div>
+            <div class="blk-d" id="wkHint">点某一天可单独切换「班 / 休」</div>
+          </div>
+          <div class="wk" id="wkGrid">
+            <div class="wd on" data-d="0">一<span>班</span></div>
+            <div class="wd on" data-d="1">二<span>班</span></div>
+            <div class="wd on" data-d="2">三<span>班</span></div>
+            <div class="wd on" data-d="3">四<span>班</span></div>
+            <div class="wd on" data-d="4">五<span>班</span></div>
+            <div class="wd" data-d="5">六<span>休</span></div>
+            <div class="wd" data-d="6">日<span>休</span></div>
+          </div>
+        </div>
+
+        <div class="blk">
+          <div class="blk-h">
+            <div class="blk-t">每日时间</div>
+            <div class="blk-d">24 小时制，改完立刻按新作息算</div>
+          </div>
+          <div class="time-row">
+            <div class="tcell"><label>上班</label><input class="inp time" id="tStart" type="time" /></div>
+            <div class="tarrow">→</div>
+            <div class="tcell"><label>下班</label><input class="inp time" id="tEnd" type="time" /></div>
+            <div style="width:1px;height:26px;background:#262D37;margin:0 8px 2px"></div>
+            <div class="tcell"><label>午休开始</label><input class="inp time" id="tL1" type="time" /></div>
+            <div class="tarrow">–</div>
+            <div class="tcell"><label>午休结束</label><input class="inp time" id="tL2" type="time" /></div>
+          </div>
+          <div class="calc-strip" id="schedCalc">在岗 9.0 h − 午休 1.5 h = <b>计薪 7.5 h</b><span>已同步到「薪资与口径」</span></div>
+        </div>
+
+        <div class="blk" id="calBlk">
+          <div class="blk-h">
+            <div class="blk-t">法定节假日与调休</div>
+            <div class="blk-d" id="calMonth">—</div>
+          </div>
+          <div class="cal-wrap">
+            <div class="cal" id="calGrid"></div>
+            <div class="cal-side">
+              <div class="cs-h">本月标记</div>
+              <div class="lg"><i class="c-hol"></i>法定假日 · <b id="calHol">0</b> 天</div>
+              <div class="lg"><i class="c-rest"></i>周末 · <b id="calRest">0</b> 天</div>
+              <div class="lg"><i class="c-mk"></i>调休补班 · <b id="calMk">0</b> 天</div>
+              <div class="cs-next">
+                <span>下一个法定假日</span>
+                <div id="calNext">—</div>
+              </div>
+              <div class="seg2" id="calMode" style="margin-top:9px;width:100%">
+                <button class="on" data-v="holiday" style="flex:1">标放假</button>
+                <button data-v="makeup" style="flex:1">标补班</button>
+              </div>
+              <div class="cs-foot">选一种标记，再点日历上的某一天；点已标过的同一天即取消。</div>
+            </div>
+            <div class="cal-notes">
+              <div class="cn-t">为什么不自动同步国务院公告</div>
+              <p>调休补班日每年都不一样。硬编码春节前后的安排，一年至少算错 3–5 天，
+                用户的日薪会被系统性拉偏——这类错误一旦被截图发出去，比功能少更致命。
+                所以这张表<b>由你自己维护</b>，工具只负责按它算。</p>
+              <div class="cn-t" style="margin-top:12px">同一天只能是一种</div>
+              <p>把某天标成放假，它会自动从补班表里删掉，反之亦然。<b>补班优先于放假、放假优先于周模板</b>——
+                这个顺序写死在计时层，改不了，也不该改。</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="set-row">
+          <div class="l">
+            <div class="t">时区策略</div>
+            <div class="d">跟随系统就是「这台电脑现在几点就是几点」；固定 UTC+8 用于出差——
+              否则系统时区一换，「09:00 上班」会变成当地时间 09:00，一整天的工作日边界整体平移</div>
+          </div>
+          <div class="r">
+            <select class="sel" id="fTz" style="min-width:210px">
+              <option value="sys">跟随系统</option>
+              <option value="fix">固定为 Asia/Shanghai（UTC+8）</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="set-row">
+          <div class="l">
+            <div class="t">跨零点夜班</div>
+            <div class="d">下班时刻早于上班时刻时，自动判定为跨天并归属到「开始那天」</div>
+          </div>
+          <div class="r"><div class="switch" id="swCross"></div></div>
+        </div>
+
+        <div class="callout">
+          <b>为什么改作息不重算今天已赚：</b>今天已经在按旧作息计时了，
+          中途换一套会让进度条当场跳一下。生效时机是<b>下一帧</b>——
+          这一条与原型 04-H「生效时机」一致，只是「次日 0 点」那一档还没做，
+          现在就让它立即生效，至少不会出现「改了没反应」。
+        </div>
+      </section>
+
+      <!-- ========== 03 外观与尺寸 ========== -->
+      <section class="pane" data-g="look">
+        <div class="pane-h">
+          <div>
+            <div class="h-t">外观与尺寸</div>
+            <div class="h-d">改完悬浮窗立刻变——它就在屏幕右上角，不用切窗口看预览。</div>
+          </div>
+          <div class="h-r">GROUP 03 / 07</div>
+        </div>
+
+        <div class="blk">
+          <div class="blk-t" style="margin-bottom:9px">窗口尺寸</div>
+          <div class="sz-row" id="szRow">
+            <div class="sz" data-sz="compact"><b>紧凑</b><span>236 × 118</span></div>
+            <div class="sz on" data-sz="normal"><b>标准</b><span>302 × 242</span></div>
+            <div class="sz" data-sz="expanded"><b>展开</b><span>322 × 330</span></div>
+          </div>
+          <div class="blk-d" style="margin-top:8px">
+            三档不是缩放，是三套版式：紧凑砍掉指标行与页脚，展开多一块等价物。
+            双击悬浮窗标题区或滚轮也能切。
+          </div>
+        </div>
+
+        <div class="blk">
+          <div class="blk-t" style="margin-bottom:9px">主题</div>
+          <div class="th-grid" id="thGrid">
+            <div class="th on" data-th="dark"><i class="t1"></i><span>深色玻璃</span></div>
+            <div class="th" data-th="light"><i class="t2"></i><span>浅色玻璃</span></div>
+            <div class="th" data-th="black"><i class="t3"></i><span>纯黑</span></div>
+            <div class="th" data-th="system"><i class="t4"></i><span>跟随系统</span></div>
+          </div>
+          <div class="blk-d" style="margin-top:8px">
+            主题只改底色、边框和正文。<b>语义色永远不动</b>：午休琥珀、加班蓝、请假紫说的是状态，不是皮肤。
+          </div>
+        </div>
+
+        <div class="blk">
+          <div class="blk-h" style="margin-bottom:9px">
+            <div class="blk-t">强调色</div>
+            <div class="blk-d" id="acVal" style="font-family:var(--mono);font-size:9.5px">#35E07F</div>
+          </div>
+          <div class="ac-row" id="acRow">
+            <span class="ac on" data-ac="#35E07F" style="background:#35E07F" title="薄荷绿"></span>
+            <span class="ac" data-ac="#2DD4BF" style="background:#2DD4BF" title="青"></span>
+            <span class="ac" data-ac="#4C9AFF" style="background:#4C9AFF" title="蓝"></span>
+            <span class="ac" data-ac="#A78BFA" style="background:#A78BFA" title="紫"></span>
+            <span class="ac" data-ac="#FF9F45" style="background:#FF9F45" title="橙"></span>
+            <span class="ac" data-ac="#F472B6" style="background:#F472B6" title="粉"></span>
+          </div>
+          <div class="blk-d" style="margin-top:8px">
+            只影响「在岗」这类中性状态。午休琥珀、加班蓝、请假紫是<b>语义色</b>，
+            不跟着换——不然「现在是加班」这件事也会被你的主题色吃掉。
+          </div>
+        </div>
+
+        <div class="blk">
+          <div class="blk-h" style="margin-bottom:8px">
+            <div class="blk-t">不透明度</div>
+            <div class="blk-d" id="opVal" style="font-family:var(--mono);font-size:10px">92%</div>
+          </div>
+          <input type="range" class="rng" id="opRng" min="50" max="100" step="1" value="92" style="width:100%" />
+        </div>
+
+        <div class="blk">
+          <div class="blk-t" style="margin-bottom:9px">数字字体</div>
+          <div class="chips" id="ftRow">
+            <span class="chip on" data-f="sf">SF Mono</span>
+            <span class="chip" data-f="jb">JetBrains Mono</span>
+            <span class="chip" data-f="sys">系统等宽</span>
+          </div>
+          <div class="blk-d" style="margin-top:8px">
+            只换数字，不换中文——这三个字体都不带汉字，硬套上去会让「每秒进账」掉进某个奇怪的 fallback。
+          </div>
+        </div>
+
+        <div class="blk">
+          <div class="blk-t" style="margin-bottom:9px">信息密度</div>
+          <div class="set-row" style="padding:8px 0">
+            <div class="l"><div class="t" style="font-size:12px">每秒 / 时薪 / 日薪</div></div>
+            <div class="r"><div class="switch on" data-den="metrics"></div></div>
+          </div>
+          <div class="set-row" style="padding:8px 0">
+            <div class="l"><div class="t" style="font-size:12px">进度条</div></div>
+            <div class="r"><div class="switch on" data-den="bar"></div></div>
+          </div>
+          <div class="set-row" style="padding:8px 0">
+            <div class="l"><div class="t" style="font-size:12px">底部文案</div></div>
+            <div class="r"><div class="switch on" data-den="tip"></div></div>
+          </div>
+          <div class="set-row" style="padding:8px 0;border-bottom:0">
+            <div class="l"><div class="t" style="font-size:12px">白干条</div></div>
+            <div class="r"><div class="switch on" data-den="shadow"></div></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========== 04 行为与快捷键 ========== -->
+      <section class="pane" data-g="behavior">
+        <div class="pane-h">
+          <div>
+            <div class="h-t">行为与快捷键</div>
+            <div class="h-d">一个小工具好不好用，八成取决于这一页。快捷键是真的能录的——点方框，直接按你想要的组合键。</div>
+          </div>
+          <div class="h-r">GROUP 04 / 07</div>
+        </div>
+
+        <div class="blk">
+          <div class="blk-h">
+            <div class="blk-t"><span class="dot" style="background:var(--green)"></span>全局快捷键</div>
+            <div class="blk-d" id="keyHint">点方框 → 按下组合键；Esc 取消</div>
+          </div>
+          <div class="krow">
+            <div class="kl"><b>显示 / 隐藏悬浮窗</b><span>任何窗口下都生效，包括全屏应用与远程桌面</span></div>
+            <div class="kr" id="hkShow" data-k="show"></div>
+          </div>
+          <div class="krow">
+            <div class="kl"><b>切换鼠标穿透</b><span>穿透时点击直接落到下层窗口，不再挡住你的操作</span></div>
+            <div class="kr" id="hkPassthru" data-k="passthru"></div>
+          </div>
+          <div class="krow">
+            <div class="kl"><b>开始 / 结束计时</b><span>临时离座时手动冻结，回来一键接续</span></div>
+            <div class="kr" id="hkClock" data-k="clock"></div>
+          </div>
+          <div class="krow">
+            <div class="kl"><b>记录一笔额外收入</b><span>加班费、补贴到账时快速追加</span></div>
+            <div class="kr" id="hkExtra" data-k="extra"></div>
+          </div>
+        </div>
+
+        <div class="set-row">
+          <div class="l">
+            <div class="t">开机自启</div>
+            <div class="d">登录后自动运行，只写 <b>HKCU\…\Run</b> 一个值，不碰计划任务、不碰启动文件夹</div>
+          </div>
+          <div class="r"><div class="switch" id="swBoot"></div></div>
+        </div>
+
+        <div class="set-row">
+          <div class="l">
+            <div class="t">静默启动</div>
+            <div class="d">启动时不弹悬浮窗，只驻留托盘，等你按快捷键再叫出来</div>
+          </div>
+          <div class="r"><div class="switch" id="swSilent"></div></div>
+        </div>
+
+        <div class="set-row">
+          <div class="l">
+            <div class="t">边缘吸附</div>
+            <div class="d">拖到屏幕边缘时自动贴边，阈值 <b style="color:var(--green)" id="snapVal">24</b> pt（拖到 0 即关闭）</div>
+          </div>
+          <div class="r" style="width:170px"><input type="range" class="rng" id="snapRng" min="0" max="40" step="1" value="24" /></div>
+        </div>
+
+        <div class="set-row">
+          <div class="l">
+            <div class="t">鼠标穿透</div>
+            <div class="d">开启后点击直接落到下层窗口。悬浮窗右上角的 ◎ 也能开，关只能从托盘菜单关</div>
+          </div>
+          <div class="r"><div class="switch" id="swThru"></div></div>
+        </div>
+
+        <div class="set-row">
+          <div class="l">
+            <div class="t">空闲检测</div>
+            <div class="d">连续 <b style="color:var(--green)" id="idleVal">5</b> 分钟无键鼠活动 → 自动冻结计时，回来继续。
+              当前这台机器上读到 <span id="idleNow" style="font-family:var(--mono)">0</span> 秒</div>
+          </div>
+          <div class="r" style="display:flex;align-items:center;gap:10px">
+            <select class="sel" id="fIdleMin" style="height:27px;font-size:11px;min-width:92px">
+              <option value="3">3 分钟</option>
+              <option value="5">5 分钟</option>
+              <option value="10">10 分钟</option>
+              <option value="15">15 分钟</option>
+            </select>
+            <div class="switch" id="swIdle"></div>
+          </div>
+        </div>
+
+        <div class="set-row">
+          <div class="l">
+            <div class="t">关闭窗口时</div>
+            <div class="d">点右上角 × 的行为</div>
+          </div>
+          <div class="r">
+            <div class="seg2" id="segClose">
+              <button data-v="tray">最小化到托盘</button>
+              <button data-v="quit">直接退出</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 多显示器：原型那行给了三个选项，这里做前两个。
+             「所有屏各显示一个」不做——每个窗口是一整扇 WebView，
+             两块屏就是两倍内存，而这个东西的定位是角落里一个小窗。 -->
+        <div class="blk">
+          <div class="blk-h">
+            <div class="blk-t">多显示器</div>
+          </div>
+          <div class="chips" id="mmChips">
+            <span class="chip on" data-mm="remember">记住所在屏</span>
+            <span class="chip" data-mm="primary">固定在主屏</span>
+          </div>
+          <div class="blk-d" style="margin-top:7px">
+            记住所在屏：每块屏各记一份位置，插拔外接屏之后回到那块屏上次待的地方。
+            固定在主屏：每次启动都摆到主屏右上角。拖到别的屏仍然是允许的——跟鼠标抢窗口比不听话更烦人。
+          </div>
+        </div>
+
+        <div class="blk info">
+          <div class="blk-t"><span class="dot" style="background:var(--blue)"></span>托盘菜单已经能用了</div>
+          <div class="blk-d" style="margin-top:6px;line-height:1.9">
+            右键托盘图标：显示悬浮窗 / 切换尺寸 / 暂停计时 / <b>今天请假</b> / 隐藏金额 /
+            鼠标穿透 / 加班按 1.5× 计薪 / 设置… / 重置位置 / 退出。
+            左键单击图标是「显示 / 隐藏」——这是最高频的动作，不该多点一次菜单。
+          </div>
+        </div>
+      </section>
+
+      <!-- ========== 05 通知与文案 ========== -->
+      <section class="pane" data-g="notify">
+        <div class="pane-h">
+          <div>
+            <div class="h-t">通知与文案</div>
+            <div class="h-d">通知是自绘的小窗口：不进通知中心、不抢焦点、不出声。等价物换算则是悬浮窗展开态真正在用的。</div>
+          </div>
+          <div class="h-r">GROUP 05 / 07</div>
+        </div>
+
+        <div class="blk">
+          <div class="blk-h">
+            <div class="blk-t"><span class="dot" style="background:var(--green)"></span>下班通知</div>
+            <div class="switch" id="swEnd"></div>
+          </div>
+          <div class="chips" id="endChips">
+            <span class="chip on" data-v="amount">只报金额</span>
+            <span class="chip" data-v="amountwork">金额 + 工时</span>
+            <span class="chip" data-v="amounteq">金额 + 等价物</span>
+          </div>
+        </div>
+
+        <div class="blk">
+          <div class="blk-h">
+            <div class="blk-t">午休提醒</div>
+            <div class="switch" id="swLunch"></div>
+          </div>
+          <div class="chips" id="lunchChips">
+            <span class="chip" data-v="5">提前 5 分钟</span>
+            <span class="chip on" data-v="10">提前 10 分钟</span>
+            <span class="chip" data-v="15">提前 15 分钟</span>
+            <span class="chip" data-v="30">提前 30 分钟</span>
+          </div>
+          <div class="blk-d" style="margin-top:7px">到点前提示一句「先去占个座」，只在上班时段内响一次。</div>
+        </div>
+
+        <div class="blk">
+          <div class="blk-h">
+            <div class="blk-t">久坐提醒</div>
+            <div class="switch" id="swSit"></div>
+          </div>
+          <div class="seg2" id="segSit">
+            <button data-v="45">45 分钟</button>
+            <button class="on" data-v="60">60 分钟</button>
+            <button data-v="90">90 分钟</button>
+          </div>
+          <div class="blk-d" style="margin-top:7px">只弹一条不打断的通知，不抢焦点、不发出声音。</div>
+        </div>
+
+        <div class="blk">
+          <div class="blk-h">
+            <div class="blk-t">免打扰</div>
+            <div class="switch" id="swDnd"></div>
+          </div>
+          <div class="blk-d" style="margin-bottom:9px">这段时间内不弹任何通知，数字照常跑。跨零点也认（比如 19:00 – 08:30）。</div>
+          <div class="time-row">
+            <div class="tcell"><label>从</label><input class="inp time" id="dndFrom" type="time" /></div>
+            <div class="tarrow">–</div>
+            <div class="tcell"><label>到</label><input class="inp time" id="dndTo" type="time" /></div>
+          </div>
+        </div>
+
+        <div class="blk">
+          <div class="blk-h">
+            <div class="blk-t"><span class="dot"></span>等价物基准</div>
+            <div class="blk-d" id="eqLive">今天 ≈ 0.0 杯奶茶</div>
+          </div>
+          <div class="chips" id="eqChips">
+            <span class="chip on" data-eq="奶茶" data-price="25">奶茶 ¥25</span>
+            <span class="chip" data-eq="咖啡" data-price="18">咖啡 ¥18</span>
+            <span class="chip" data-eq="打车" data-price="35">打车 ¥35</span>
+            <span class="chip" data-eq="电影票" data-price="60">电影票 ¥60</span>
+          </div>
+          <div class="set-row" style="padding:12px 0 0;border-bottom:0">
+            <div class="l"><div class="t" style="font-size:12px">单价</div></div>
+            <div class="r"><input class="inp num" id="fEqPrice" type="number" step="0.5" min="0.01" style="width:92px" /></div>
+          </div>
+          <div class="set-row" style="padding:9px 0">
+            <div class="l"><div class="t" style="font-size:12px">累计目标杯数</div></div>
+            <div class="r"><input class="inp num" id="fEqGoal" type="number" step="100" min="1" style="width:92px" /></div>
+          </div>
+          <div class="set-row" style="padding:9px 0;border-bottom:0">
+            <div class="l"><div class="t" style="font-size:12px">今日目标杯数</div></div>
+            <div class="r"><input class="inp num" id="fEqDay" type="number" step="1" min="1" style="width:92px" /></div>
+          </div>
+        </div>
+
+        <!-- 文案风格：三套表在 hud.js 的 COPY 里，逐句换过。
+             静默档不只是换个说法——它连那行小字都不显示，午休 / 久坐提醒也不发。
+             金额一个字都不受影响，三套共用同一份数字。 -->
+        <div class="blk">
+          <div class="blk-h">
+            <div class="blk-t">文案风格</div>
+            <div class="blk-d" id="cpPreview">打卡成功，先稳住</div>
+          </div>
+          <div class="chips" id="cpChips">
+            <span class="chip on" data-cp="emotional">情绪向</span>
+            <span class="chip" data-cp="plain">严谨</span>
+            <span class="chip" data-cp="silent">静默</span>
+          </div>
+          <div class="blk-d" style="margin-top:7px">
+            右上角那句预览就是对比窗口：情绪向会调侃，严谨只陈述事实，静默一个字都不说。
+          </div>
+        </div>
+      </section>
+
+      <!-- ========== 06 数据与隐私 ========== -->
+      <section class="pane" data-g="privacy">
+        <div class="pane-h">
+          <div>
+            <div class="h-t">数据与隐私</div>
+            <div class="h-d">薪资是最敏感的个人数据之一。这一页只回答一个问题：我的数据在哪、谁能看到。</div>
+          </div>
+          <div class="h-r">GROUP 06 / 07</div>
+        </div>
+
+        <div class="set-row">
+          <div class="l">
+            <div class="t">存储位置</div>
+            <div class="d">一个 JSON 文件，只落在本机磁盘，没有第二份</div>
+          </div>
+          <div class="r"><span class="pill" id="dataPath" style="font-family:var(--mono);font-size:10px">…</span></div>
+        </div>
+
+        <div class="blk">
+          <div class="blk-h">
+            <div class="blk-t"><span class="dot"></span>一份本地文件，没有第二条路</div>
+            <div class="blk-d">不做账号、不做云、不做导出</div>
+          </div>
+          <div class="blk-d" style="line-height:1.9">
+            做同步要先建一套身份体系（注册、找回、注销、客服）和一台长期存薪资的服务器；
+            做导出要一直维护格式、编码、字段口径和版本兼容。两件事都只为「换设备时省 90 秒」。
+            <b style="color:var(--green)">所以都不做。</b>
+          </div>
+          <div style="display:flex;gap:7px;margin-top:11px;flex-wrap:wrap">
+            <span class="pill gray">不做账号</span>
+            <span class="pill gray">不做云同步</span>
+            <span class="pill gray">不做数据导出</span>
+            <span class="pill gray">不做设备指纹</span>
+            <span class="pill gray">不做行为上报</span>
+          </div>
+        </div>
+
+        <div class="callout warn">
+          <b>代价写在明面上：</b>换电脑要重新配一遍（约 90 秒），历史记录不跟着走；
+          硬盘坏了、系统重装了，历史也就没了。没有备份功能——这一条会出现在首次启动的说明里，
+          而不是等你发现数据没了才去找。
+        </div>
+
+        <div class="blk danger">
+          <div class="blk-h">
+            <div class="blk-t"><span class="dot" style="background:#FF5C5C"></span>危险操作</div>
+            <div class="blk-d">删除后不可恢复，需要输入 <b style="color:#FF8A8A">DELETE</b> 才放行</div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn-d" id="clrToday">清除今天的记录</button>
+            <button class="btn-d" id="clrMonth">清除本月记录</button>
+            <button class="btn-d" id="clrAll">清空全部数据</button>
+          </div>
+          <div class="clr-box" id="clrBox" hidden>
+            <span id="clrWhat">确定要清除吗？</span>
+            <input class="inp" id="clrWord" placeholder="输入 DELETE" style="width:130px;font-family:var(--mono)" />
+            <button class="btn-d on" id="clrGo">确认清除</button>
+            <button class="btn-g" id="clrCancel">取消</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========== 07 关于 ========== -->
+      <section class="pane" data-g="about">
+        <div class="pane-h">
+          <div>
+            <div class="h-t">关于</div>
+            <div class="h-d">版本、版权与更新。</div>
+          </div>
+          <div class="h-r">GROUP 07 / 07</div>
+        </div>
+
+        <div class="about-hero">
+          <div class="about-mark">牛</div>
+          <div>
+            <div style="font-size:15px;font-weight:650">牛马薪动了！</div>
+            <div style="font-size:11px;color:var(--muted);margin-top:3px" id="verLine">PayPulse · 版本 0.1.0</div>
+          </div>
+        </div>
+
+        <div class="blk">
+          <div class="blk-d" style="line-height:1.9;margin-bottom:12px">
+            把「你的时间值多少钱」摆在桌面上的小工具。名字是自嘲，数字是真的。<br />
+            所有薪资数据只存在你自己的电脑里——不联网、不上传、不需要账号。
+          </div>
+          <div class="kv">
+            <span>当前版本</span><b id="kVer">0.1.0</b>
+            <span>支持系统</span><b>Windows 11 / 10（WebView2）</b>
+            <span>运行内核</span><b>Tauri 2 · WebView2</b>
+            <span>数据存储</span><b>本地 JSON（单文件）</b>
+            <span>许可方式</span><b>AGPL-3.0 · 免费使用</b>
+            <span>数据目录</span><b id="kDir">…</b>
+          </div>
+        </div>
+
+        <!-- 软件更新：真状态机。点「检查更新」走 解析 → 拉清单 → 验签 → 比版本 -->
+        <div class="upd">
+          <div class="upd-h">
+            <div>
+              <div class="upd-t">软件更新</div>
+              <div class="upd-s" id="updSub">上次检查：从未 · 通道 稳定版</div>
+            </div>
+            <div class="upd-act">
+              <select class="sel" id="updChan" style="min-width:96px;height:30px;font-size:11px">
+                <option>稳定版</option>
+                <option>测试版</option>
+              </select>
+              <button class="btn btn-p" id="btnCheck" style="height:30px;font-size:11.5px;padding:0 14px">检查更新</button>
+            </div>
+          </div>
+          <div class="upd-body" id="updBody"></div>
+        </div>
+
+        <!-- 两个入口：打赏 + 公众号 -->
+        <div class="qr-row">
+          <div class="qr-item">
+            <div class="qr-img"><img src="qr-donate.jpg" alt="微信打赏码" /></div>
+            <div class="qr-t">微信扫码打赏</div>
+            <div class="qr-d">觉得有用就请我喝杯咖啡<br />完全自愿，不影响使用</div>
+          </div>
+          <div class="qr-item">
+            <div class="qr-img"><img src="qr-official.jpg" alt="公众号二维码" /></div>
+            <div class="qr-t">关注公众号</div>
+            <div class="qr-d">BYDOTA · 版本更新与问题反馈<br />新功能优先在这里发</div>
+          </div>
+        </div>
+
+        <div class="blk">
+          <div class="blk-t" style="margin-bottom:8px">更新日志</div>
+          <div class="log-row"><b>0.1.0</b><span style="flex:1;color:var(--text2);margin-left:0">实时悬浮窗、双账（月薪 / 白干）、三档尺寸、请假态、排班形态、节假日与补班、年终奖摊分、通知三件套、全局快捷键、开机自启、空闲检测</span><span style="color:var(--green)">当前版本</span></div>
+        </div>
+
+        <div class="about-foot">
+          <span>© 2026 <b>BYDOTA</b> · 数据仅存本机 · 不联网 · 不上传</span>
+        </div>
+      </section>
+
+    </main>
+  </div>
+</div>
+
+<script src="settings.js"></script>
+</body>
+</html>

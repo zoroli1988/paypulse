@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>薪动了</title>
+<link rel="stylesheet" href="toast.css" />
+</head>
+<body>
+  <!-- 一条通知只有三样东西：一个图标、一行标题、一行正文。
+       多一个按钮都算打扰——用户要么看完了，要么不关心。 -->
+  <div class="t" id="t" data-tone="ok">
+    <div class="ic" id="ic"></div>
+    <div class="tx">
+      <div class="ti" id="ti">今日已到账</div>
+      <div class="tb" id="tb"></div>
+    </div>
+  </div>
+  <script src="toast.js"></script>
+</body>
+</html>

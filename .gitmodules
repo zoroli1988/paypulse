@@ -1,0 +1,3 @@
+[submodule "paypulse-core"]
+	path = paypulse-core
+	url = git@github.com:zoroli1988/paypulse-core.git

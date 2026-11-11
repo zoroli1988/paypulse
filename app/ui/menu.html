@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>菜单</title>
+<style>
+/* ---- 悬浮窗右键的自绘菜单，208 × 204 ----
+   替代原生 Menu::popup：原生在 Windows 上只能是浅色灰底，跟深色悬浮窗不搭。
+   这里按原型 01-D 画深色五项，与悬浮窗同一套玻璃视觉。
+   主题跟应用走。 */
+
+:root {
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
+  --accent: #35E07F;
+  --bg: rgba(17, 19, 24, .97);
+  --fg: #fff;
+  --fg-rgb: 255, 255, 255;
+  --muted: rgba(255, 255, 255, .45);
+  --line: rgba(255, 255, 255, .1);
+  --hover: rgba(255, 255, 255, .07);
+}
+
+:root[data-theme="light"] {
+  --bg: rgba(250, 250, 252, .98);
+  --fg: #14161B;
+  --fg-rgb: 20, 22, 27;
+  --muted: rgba(20, 22, 27, .48);
+  --line: rgba(0, 0, 0, .12);
+  --hover: rgba(0, 0, 0, .05);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  color: var(--fg);
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: default;
+}
+
+.card {
+  width: 208px;
+  height: 204px;
+  padding: 7px;
+  border-radius: 12px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  box-shadow:
+    0 18px 48px -10px rgba(0, 0, 0, .7),
+    0 0 0 .5px rgba(0, 0, 0, .5),
+    inset 0 1px 0 rgba(var(--fg-rgb), .05);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  height: 36px;
+  padding: 0 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--fg);
+  cursor: pointer;
+  transition: background .12s;
+}
+.item:hover { background: var(--hover); }
+
+.item .ic {
+  width: 18px;
+  text-align: center;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+  flex: none;
+}
+.item .lbl { flex: 1; }
+.item .check {
+  width: 14px;
+  text-align: center;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 700;
+  visibility: hidden;
+}
+.item.checked .check { visibility: visible; }
+
+.item .sub {
+  font-size: 10px;
+  color: var(--muted);
+  font-family: var(--mono);
+}
+
+.sep {
+  height: 1px;
+  margin: 3px 6px;
+  background: var(--line);
+}
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="item" data-action="settings">
+      <span class="ic">⚙</span><span class="lbl">设置…</span><span class="check">✓</span>
+    </div>
+    <div class="item" data-action="size">
+      <span class="ic">▣</span><span class="lbl">切换尺寸</span><span class="sub" id="sizeLabel">标准</span>
+    </div>
+    <div class="item" data-action="pause" id="pauseItem">
+      <span class="ic">⏸</span><span class="lbl">暂停计时</span><span class="check">✓</span>
+    </div>
+    <div class="sep"></div>
+    <div class="item" data-action="detail">
+      <span class="ic">▤</span><span class="lbl">今日明细</span><span class="check">✓</span>
+    </div>
+    <div class="sep"></div>
+    <div class="item" data-action="quit">
+      <span class="ic">✕</span><span class="lbl">退出</span><span class="check">✓</span>
+    </div>
+  </div>
+
+<script>
+(function () {
+  "use strict";
+
+  var invoke = window.__TAURI__ && window.__TAURI__.core
+    ? window.__TAURI__.core.invoke
+    : null;
+
+  var sizeNames = { compact: "紧凑", normal: "标准", expanded: "展开" };
+
+  function paintTheme() {
+    if (!invoke) return;
+    invoke("get_settings").then(function (v) {
+      var t = v && v.theme;
+      if (t === "system") {
+        var mq = window.matchMedia("(prefers-color-scheme: light)");
+        t = mq && mq.matches ? "light" : "dark";
+      }
+      document.documentElement.setAttribute(
+        "data-theme", t === "light" ? "light" : "dark"
+      );
+    }).catch(function () {});
+  }
+
+  function paintState() {
+    if (!invoke) return;
+    invoke("menu_state").then(function (v) {
+      var pause = document.getElementById("pauseItem");
+      if (pause) pause.classList.toggle("checked", !!v.paused);
+      var size = document.getElementById("sizeLabel");
+      if (size) size.textContent = sizeNames[v.size] || v.size;
+    }).catch(function () {});
+  }
+
+  document.querySelectorAll(".item").forEach(function (it) {
+    it.addEventListener("click", function (e) {
+      e.stopPropagation();
+      var action = it.getAttribute("data-action");
+      if (!action || !invoke) return;
+      invoke("menu_action", { action: action }).catch(function () {});
+    });
+  });
+
+  // 点到菜单外就收（失焦由 Rust 侧处理），这里也兜一层 Esc
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      if (invoke) invoke("menu_close").catch(function () {});
+    }
+  });
+
+  paintTheme();
+  paintState();
+})();
+</script>
+</body>
+</html>

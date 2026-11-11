@@ -1,0 +1,9 @@
+[package]
+name = "paypulse-clock"
+version = "0.1.0"
+edition = "2021"
+description = "墙上时钟 → 已计薪秒数。纯函数，无 IO，可脱机测试。"
+license = "AGPL-3.0"
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }

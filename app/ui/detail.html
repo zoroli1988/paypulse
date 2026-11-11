@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>今日明细</title>
+<style>
+/* ---- 一张「看一眼就走」的今日账目，360 × 460 ----
+   原型稿里「今日明细」只有一行字没画界面，这里按现有视觉语言补：
+   深色玻璃、18 圆角、绿色主强调、等宽数字，和 extra 窗同一套变量。
+   主题跟应用走（打开时问一次 get_settings），不自己猜系统。 */
+
+:root {
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
+  --accent: #35E07F;
+  --amber: #FFB020;
+  --blue: #4C9AFF;
+  --bg: rgba(17, 19, 24, .97);
+  --fg: #fff;
+  --fg-rgb: 255, 255, 255;
+  --muted: rgba(255, 255, 255, .45);
+  --line: rgba(255, 255, 255, .1);
+  --field: rgba(255, 255, 255, .06);
+}
+
+:root[data-theme="light"] {
+  --bg: rgba(250, 250, 252, .98);
+  --fg: #14161B;
+  --fg-rgb: 20, 22, 27;
+  --muted: rgba(20, 22, 27, .48);
+  --line: rgba(0, 0, 0, .12);
+  --field: rgba(0, 0, 0, .05);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  color: var(--fg);
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: default;
+}
+
+.card {
+  width: 360px;
+  height: 460px;
+  padding: 16px 18px 14px;
+  border-radius: 18px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  box-shadow:
+    0 30px 64px -18px rgba(0, 0, 0, .75),
+    0 0 0 .5px rgba(0, 0, 0, .5),
+    inset 0 1px 0 rgba(var(--fg-rgb), .06);
+  display: flex;
+  flex-direction: column;
+}
+
+.head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+.head b { font-size: 14px; font-weight: 600; letter-spacing: .2px; }
+.head span { font-size: 10px; color: var(--muted); font-family: var(--mono); letter-spacing: .5px; }
+
+/* 主账：今日已赚 */
+.big {
+  margin-top: 14px;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.big .lab { font-size: 11px; color: var(--muted); letter-spacing: .3px; }
+.big .val {
+  font-family: var(--mono);
+  font-size: 34px;
+  font-weight: 700;
+  letter-spacing: -1.5px;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  margin-left: auto;
+  text-shadow: 0 0 26px rgba(53, 224, 127, .28);
+}
+
+/* 口径参考一行 */
+.ref {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+.ref .m { display: flex; flex-direction: column; gap: 2px; }
+.ref .m .k { font-size: 10px; color: var(--muted); letter-spacing: .2px; }
+.ref .m .v {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 双账分列：白干价值 */
+.shadow {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(255, 176, 32, .07);
+  border: 1px solid rgba(255, 176, 32, .22);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.shadow .lab { font-size: 11px; color: var(--amber); letter-spacing: .2px; }
+.shadow .note { font-size: 9.5px; color: var(--muted); flex: 1; }
+.shadow .val {
+  font-family: var(--mono);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--amber);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 分段明细 */
+.sec {
+  margin-top: 14px;
+}
+.sec-t {
+  font-size: 10.5px;
+  color: var(--muted);
+  letter-spacing: .4px;
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.sec-t::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+.rows {
+  max-height: 120px;
+  overflow-y: auto;
+}
+.rows::-webkit-scrollbar { width: 8px; }
+.rows::-webkit-scrollbar-thumb { background: rgba(128, 136, 146, .3); border-radius: 4px; }
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 4px;
+  font-size: 11px;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
+  border-bottom: 1px solid rgba(var(--fg-rgb), .04);
+}
+.row:last-child { border-bottom: 0; }
+.row .t { color: var(--muted); min-width: 52px; }
+.row .len { color: var(--muted); flex: 1; text-align: right; }
+.row .val { color: var(--amber); font-weight: 600; }
+.row .tag {
+  font-size: 9px;
+  font-family: -apple-system, "Segoe UI", sans-serif;
+  color: var(--blue);
+  letter-spacing: .3px;
+}
+.empty {
+  padding: 10px 4px;
+  font-size: 11px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.foot {
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  font-size: 10px;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.foot .key { font-family: var(--mono); letter-spacing: .3px; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="head">
+      <b>今日明细</b>
+      <span id="today">—</span>
+    </div>
+
+    <div class="big">
+      <span class="lab">今日已赚</span>
+      <span class="val" id="amount">¥0.00</span>
+    </div>
+
+    <div class="ref">
+      <div class="m"><span class="k">日薪</span><span class="v" id="day">—</span></div>
+      <div class="m"><span class="k">时薪</span><span class="v" id="hourly">—</span></div>
+      <div class="m"><span class="k">每秒</span><span class="v" id="perSec">—</span></div>
+    </div>
+
+    <div class="shadow">
+      <span class="lab">白干价值</span>
+      <span class="note">不入月薪，只作对照</span>
+      <span class="val" id="shadow">¥0.00</span>
+    </div>
+
+    <div class="sec">
+      <div class="sec-t">已工作时长 <span id="worked" style="color:var(--fg);font-family:var(--mono)">—</span></div>
+    </div>
+
+    <div class="sec">
+      <div class="sec-t">午休加班段</div>
+      <div class="rows" id="lunchRows"></div>
+    </div>
+
+    <div class="sec">
+      <div class="sec-t">暂停段</div>
+      <div class="rows" id="pauseRows"></div>
+    </div>
+
+    <div class="sec">
+      <div class="sec-t">今日额外进账</div>
+      <div class="rows" id="extraRows"></div>
+    </div>
+
+    <div class="foot">
+      <span id="extraTotal">额外合计 ¥0.00</span>
+      <span class="key">Esc 关闭</span>
+    </div>
+  </div>
+
+<script>
+(function () {
+  "use strict";
+
+  var invoke = window.__TAURI__ && window.__TAURI__.core
+    ? window.__TAURI__.core.invoke
+    : null;
+
+  document.addEventListener("contextmenu", function (e) { e.preventDefault(); }, true);
+
+  var el = {
+    today: document.getElementById("today"),
+    amount: document.getElementById("amount"),
+    day: document.getElementById("day"),
+    hourly: document.getElementById("hourly"),
+    perSec: document.getElementById("perSec"),
+    shadow: document.getElementById("shadow"),
+    worked: document.getElementById("worked"),
+    lunchRows: document.getElementById("lunchRows"),
+    pauseRows: document.getElementById("pauseRows"),
+    extraRows: document.getElementById("extraRows"),
+    extraTotal: document.getElementById("extraTotal")
+  };
+
+  function paintTheme() {
+    if (!invoke) return;
+    invoke("get_settings").then(function (v) {
+      var t = v && v.theme;
+      if (t === "system") {
+        var mq = window.matchMedia("(prefers-color-scheme: light)");
+        t = mq && mq.matches ? "light" : "dark";
+      }
+      document.documentElement.setAttribute(
+        "data-theme", t === "light" ? "light" : "dark"
+      );
+    }).catch(function () {});
+  }
+
+  function rowEl(cls, t, len, val, tag) {
+    var d = document.createElement("div");
+    d.className = "row";
+    var tSpan = document.createElement("span");
+    tSpan.className = "t";
+    tSpan.textContent = t;
+    var lenSpan = document.createElement("span");
+    lenSpan.className = "len";
+    lenSpan.textContent = len;
+    d.appendChild(tSpan);
+    d.appendChild(lenSpan);
+    if (val) {
+      var v = document.createElement("span");
+      v.className = "val";
+      v.textContent = val;
+      d.appendChild(v);
+    }
+    if (tag) {
+      var g = document.createElement("span");
+      g.className = "tag";
+      g.textContent = tag;
+      d.appendChild(g);
+    }
+    return d;
+  }
+
+  function empty(container) {
+    var e = document.createElement("div");
+    e.className = "empty";
+    e.textContent = "今天还没有";
+    container.appendChild(e);
+  }
+
+  function render(d) {
+    el.today.textContent = d.today;
+    el.amount.textContent = d.amount;
+    el.day.textContent = d.day;
+    el.hourly.textContent = d.hourly;
+    el.perSec.textContent = d.per_sec;
+    el.shadow.textContent = d.shadow;
+    el.worked.textContent = d.worked;
+
+    el.lunchRows.innerHTML = "";
+    if (d.lunch_spans && d.lunch_spans.length) {
+      d.lunch_spans.forEach(function (s) {
+        el.lunchRows.appendChild(rowEl(
+          "lunch",
+          s.start + "–" + s.end,
+          s.len,
+          s.value,
+          s.open ? "进行中" : ""
+        ));
+      });
+    } else {
+      empty(el.lunchRows);
+    }
+
+    el.pauseRows.innerHTML = "";
+    if (d.pause_spans && d.pause_spans.length) {
+      d.pause_spans.forEach(function (s) {
+        el.pauseRows.appendChild(rowEl(
+          "pause",
+          s.start + "–" + s.end,
+          s.len,
+          null,
+          s.open ? "进行中" : ""
+        ));
+      });
+    } else {
+      empty(el.pauseRows);
+    }
+
+    el.extraRows.innerHTML = "";
+    if (d.extras && d.extras.length) {
+      d.extras.forEach(function (e) {
+        el.extraRows.appendChild(rowEl("extra", "今天", null, e.amount, ""));
+      });
+    } else {
+      empty(el.extraRows);
+    }
+
+    el.extraTotal.textContent = "额外合计 " + d.extra_total;
+  }
+
+  function pull() {
+    if (!invoke) return;
+    invoke("detail_view").then(render).catch(function () {});
+  }
+
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      // Esc 收窗：焦点还在窗内，失焦回调不会触发，得主动让 Rust 收。
+      if (invoke) invoke("close_detail").catch(function () {});
+    }
+  });
+
+  // 每次显示都重新拉最新数据
+  window.addEventListener("focus", pull);
+
+  paintTheme();
+  pull();
+})();
+</script>
+</body>
+</html>
