@@ -3,6 +3,20 @@
 「检查更新」走的是**纯静态**方案：一份签好名的 `manifest.json` + 一堆安装包，
 都放在 GitHub Releases 上，没有跑应用的服务器。
 
+> 🚀 **一键脚本**：仓根目录的 `publish.sh` 把下面大部分步骤脚本化了：
+>
+> ```bash
+> export GITHUB_TOKEN="ghp_xxxx"          # 你的 PAT（repo + workflow 权限）
+> bash publish.sh setup-secrets           # 把 PAT + 签名私钥写进仓库 Secrets
+> bash publish.sh gen-key                 # 生成正式 Ed25519 密钥对
+> bash publish.sh release v0.1.2          # 打 tag 触发发版
+> bash publish.sh verify-release v0.1.2   # 校验 Release 与 manifest
+> bash publish.sh revoke-help             # PAT/私钥泄露时的 revoke 与轮换指引
+> ```
+>
+> 脚本的 token 全程**不落盘**：remote 保持干净 HTTPS URL，push 时用一次性
+> askpass 注入。`.git/config` 里永远不会出现明文 token。
+
 ## 一、密钥对（一次性）
 
 发版前先在一台**安全机器**（不联网最好）上生成 Ed25519 密钥对：
