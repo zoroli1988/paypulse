@@ -113,7 +113,8 @@ jobs:
     name: 生成 manifest 并发布
     runs-on: ubuntu-latest
     needs: [windows, macos]
-    if: ${{ secrets.UPDATE_SIGNING_KEY != '' }}
+    env:
+      UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
     steps:
       - uses: actions/checkout@v4
 
@@ -135,7 +136,7 @@ jobs:
           cargo run --release -- \
             --version "$VERSION" \
             --channel stable \
-            --priv "${{ secrets.UPDATE_SIGNING_KEY }}" \
+            --priv "$UPDATE_SIGNING_KEY" \
             --pkg windows-x64 "../../../../$EXE" \
             --out manifest.json
           # 替换本地路径为 Release 下载 URL（需按仓库地址拼）
