@@ -2285,7 +2285,7 @@ dependencies = [
 
 [[package]]
 name = "paypulse-app"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "chrono",
  "ed25519-dalek",

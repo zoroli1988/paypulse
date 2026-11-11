@@ -805,7 +805,10 @@ pub(crate) fn snapshot_at(now: DateTime<FixedOffset>, s: &Settings) -> Snapshot 
         shadow_sec,
         shadow_src: r.src.to_string(),
 
-        worked_sec: paid_sec,
+        // 「已工作」封顶在日工时：到点/满勤之后它就该冻结在 daily_sec，
+        // 多出来的那部分归 `ot_sec`（右下角「已过 / 已加班」），不能再往里涨——
+        // 否则下班后「已工作的累计时间」会一路叠加，看起来像软件算错。
+        worked_sec: base,
         ot_sec: out.ot_sec,
         remain_sec: p.daily_sec.saturating_sub(base),
         lunch_remain_sec: lunch_remaining_at(now, &cal),
@@ -2112,6 +2115,20 @@ mod tests {
         assert_eq!(s.remain_sec, 0);
         assert!((s.progress - 1.0).abs() < 1e-9);
         assert_eq!(s.state, "done", "18:00 整就该是已下班");
+    }
+
+    /// 下班后「已工作」必须冻结在日工时，不能继续叠加。
+    /// 18:00 和 22:00 的 worked_sec 都该是 27000（日工时），
+    /// 多出来的那部分只进 ot_sec（右下角「已过」），不该涨进「已工作」。
+    #[test]
+    fn worked_freezes_after_shift_end() {
+        let at_end = snap(at(18, 0));
+        let late = snap(at(22, 0));
+        assert_eq!(at_end.worked_sec, 27_000);
+        assert_eq!(late.worked_sec, 27_000, "下班后已工作不该继续涨");
+        // 22:00 比 18:00 多 4 小时 = 14400 秒，全进 ot_sec
+        assert_eq!(late.ot_sec, 14_400);
+        assert_eq!(at_end.ot_sec, 0);
     }
 
     /// 上午过半：进度条和「距下班」都该正好是一半。
