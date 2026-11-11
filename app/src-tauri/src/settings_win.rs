@@ -971,6 +971,25 @@ fn build(app: &AppHandle) -> tauri::Result<tauri::WebviewWindow> {
     .visible(false)
     .focused(false)
     .build()?;
+
+    // 关键：设置窗口的「关闭」要改成「隐藏」，而不是真的销毁窗口。
+    //
+    // 前端 settings.js 的 close() 调 `getCurrentWindow().close()`，那会走
+    // `CloseRequested` 然后真的把 WebView2 窗口销毁。下次再点「设置」时
+    // `get_webview_window(LABEL)` 返回 None，走「现建」分支——而用同一个
+    // 标签在旧窗口还没清干净时重建，会把主线程卡死（用户看到的「假死」）。
+    //
+    // 这里拦下 CloseRequested 改成 hide：窗口本体永存，`open()` 永远走
+    // 「找到现成窗口 → show」这条轻路径，不再现建。和 menu/detail/toast
+    // 三扇窗的做法保持一致（它们失焦 hide，永不销毁）。
+    let me = w.clone();
+    w.on_window_event(move |e| {
+        if let tauri::WindowEvent::CloseRequested { api, .. } = e {
+            api.prevent_close();
+            let _ = me.hide();
+        }
+    });
+
     Ok(w)
 }
 
