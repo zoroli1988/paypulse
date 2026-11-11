@@ -115,7 +115,9 @@ jobs:
       - name: 下载刚发布的安装包
         uses: robinraju/release-downloader@v1.9
         with:
-          latest: true
+          # 精确下载当前 tag，不能用 latest：latest 可能还指向上一个 tag（v0.1.0），
+          # 会拿到旧版的 exe 导致 manifest 指向错误的安装包。
+          tag: ${{ github.ref_name }}
           fileName: "*.exe"
           tarBall: false
           zipBall: false
@@ -123,8 +125,17 @@ jobs:
       - name: 生成 manifest.json
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          # 下载器把 exe 落在工作目录根，用绝对路径避免 cd 后相对路径错位
-          EXE=$(ls "$GITHUB_WORKSPACE"/*.exe | head -1)
+          # 精确取当前版本号的 exe（release 里可能混入旧 tag 的产物），
+          # 用文件名里带 "_${VERSION}_" 来锁定，避免拿到旧版。
+          EXE=$(ls "$GITHUB_WORKSPACE"/*_${VERSION}_*setup.exe 2>/dev/null | head -1)
+          if [ -z "$EXE" ]; then
+            EXE=$(ls "$GITHUB_WORKSPACE"/*_${VERSION}_*.exe 2>/dev/null | head -1)
+          fi
+          if [ -z "$EXE" ]; then
+            echo "找不到 ${VERSION} 的 exe，当前目录内容："; ls -la "$GITHUB_WORKSPACE"
+            exit 1
+          fi
+          echo "使用安装包：$EXE"
           cd app/tools/make-manifest
           cargo run --release -- \
             --version "$VERSION" \
