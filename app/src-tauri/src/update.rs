@@ -36,7 +36,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// ⚠️ 换公钥 = 老客户端再也验不过新清单。只在私钥泄露、必须轮换时改这里，
 /// 改完要发一个「带新公钥」的强制更新版本，否则所有旧版本都收不到后续更新。
-const UPDATE_PUBKEY_HEX: &str = "a6e3440073e853aa132996c467a5612d99ca69319495f80b99d1ab7b759da8df";
+const UPDATE_PUBKEY_HEX: &str = "bea83f4eba178479cf0352ea61b20bbee91b983682cd36adefb1975e91124695";
 
 /// 检查更新请求里的一个安装包条目。
 #[derive(Deserialize)]
