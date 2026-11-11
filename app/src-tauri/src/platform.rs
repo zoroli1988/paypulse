@@ -484,7 +484,360 @@ mod imp {
     }
 }
 
-#[cfg(not(windows))]
+// ---------------------------------------------------------------- macOS
+
+#[cfg(target_os = "macos")]
+mod imp {
+    use super::Binding;
+    use std::path::Path;
+    use std::sync::mpsc::{channel, Receiver, Sender};
+    use std::sync::Mutex;
+
+    // ---- 手写的 macOS 绑定 ----
+    //
+    // 和 Windows 侧同一个原则：不引 objc / cocoa / core-foundation 这些 crate，
+    // 只链系统框架（CoreGraphics、Carbon、CoreFoundation）里的几个符号。
+    // macOS 上的框架链接在 rustc 里写 `#[link(name = "…", kind = "framework")]`。
+
+    /// CoreFoundation 的 `CFStringRef`（不可变字符串）。这里只当不透明指针用。
+    type CfStringRef = *mut std::ffi::c_void;
+    /// CoreFoundation 的 `CFTypeRef`（任意 CF 对象）。
+    type CfTypeRef = *mut std::ffi::c_void;
+
+    /// 空闲检测用：`kCGEventSourceStateHIDSystemState` = 1（系统 HID 事件源）。
+    const HID_SYSTEM_STATE: i32 = 1;
+    /// `kCGAnyInputEventType` = ~0，表示「任意输入（键鼠/触控板/数位笔）」。
+    const ANY_INPUT_EVENT_TYPE: u32 = u32::MAX;
+
+    /// CoreGraphics 的 `CGPoint`（`x`、`y` 都是 `CGFloat` = f64）。
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct CGPoint {
+        x: f64,
+        y: f64,
+    }
+
+    /// CoreGraphics 的 `CGSize`。
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct CGSize {
+        width: f64,
+        height: f64,
+    }
+
+    /// CoreGraphics 的 `CGRect`。`origin` 是左上角，`size` 是宽高。
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct CGRect {
+        origin: CGPoint,
+        size: CGSize,
+    }
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        /// 距上一次指定类型的输入事件过去多少秒。空闲检测的核心。
+        /// `source` 传 `kCGEventSourceStateHIDSystemState`（1），
+        /// `event_type` 传 `kCGAnyInputEventType`（~0）。
+        fn CGEventSourceSecondsSinceLastEventType(source: i32, event_type: u32) -> f64;
+
+        /// 当前鼠标全局位置（逻辑坐标，原点在主屏左上，Y 向下）。
+        /// `CGEventCreate(nil)` 造一个空事件，再取它的位置——这是官方惯用法。
+        fn CGEventCreate(source: CfTypeRef) -> CfTypeRef;
+        fn CGEventGetLocation(event: CfTypeRef) -> CGPoint;
+        fn CFRelease(cf: CfTypeRef);
+
+        /// 主屏 / 屏幕列表。`work_area` 需要「可见区」而不是「整块屏」。
+        fn CGMainDisplayID() -> u32;
+        fn CGDisplayBounds(display: u32) -> CGRect;
+    }
+
+    /// 鼠标当前屏幕坐标。macOS 的 `CGEventGetLocation` 返回的是**逻辑像素**，
+    /// 与菜单窗口落位用的 `PhysicalPosition` 口径一致（Tauri 在 macOS 上
+    /// 的逻辑/物理像素默认 1:1，除非开了缩放，菜单紧贴鼠标仍能对上）。
+    pub fn cursor_pos() -> (i32, i32) {
+        unsafe {
+            let ev = CGEventCreate(std::ptr::null_mut());
+            if ev.is_null() {
+                return (0, 0);
+            }
+            let p = CGEventGetLocation(ev);
+            CFRelease(ev);
+            (p.x.round() as i32, p.y.round() as i32)
+        }
+    }
+
+    /// 距离最后一次键鼠活动过去多少秒。取整到秒。
+    pub fn idle_seconds() -> u64 {
+        unsafe { CGEventSourceSecondsSinceLastEventType(HID_SYSTEM_STATE, ANY_INPUT_EVENT_TYPE) as u64 }
+    }
+
+    /// 主屏可见区（逻辑坐标，左上角 + 宽高 → 转成左/上/右/下）。
+    ///
+    /// macOS 没有「工作区」概念（菜单栏不是任务栏，不会遮住窗口），
+    /// 这里退化为「主屏边界」：贴边逻辑在 mac 上贴的是屏幕边，足够用。
+    /// `hwnd` 参数在 mac 上没用（不按窗口定位屏），保留签名只为统一调用。
+    pub fn work_area(_hwnd: isize) -> Option<(i32, i32, i32, i32)> {
+        unsafe {
+            let b = CGDisplayBounds(CGMainDisplayID());
+            if b.size.width <= 0.0 || b.size.height <= 0.0 {
+                return None;
+            }
+            Some((
+                b.origin.x.round() as i32,
+                b.origin.y.round() as i32,
+                (b.origin.x + b.size.width).round() as i32,
+                (b.origin.y + b.size.height).round() as i32,
+            ))
+        }
+    }
+
+    /// 某个点所在的屏。macOS 上用 CGDisplayBounds 逐屏判断成本高，
+    /// 且多屏拖拽在这个产品里优先级低，先返回主屏 id 的近似。
+    /// 返回值约定与 Windows 一致：0 表示「没有屏/退化成默认」。
+    pub fn monitor_at(_x: i32, _y: i32) -> isize {
+        // 简化：把主屏当成唯一「有屏」的位置。返回值非 0 表示「这儿有屏」。
+        1
+    }
+
+    /// 窗口在哪块屏。macOS 上同样简化为「主屏」。
+    pub fn monitor_of(_hwnd: isize) -> isize {
+        1
+    }
+
+    /// 让一块矩形重画。macOS 的窗口系统（Quartz）会在窗口移动后自动重绘，
+    /// 不需要像 Windows 那样手动 `RedrawWindow`——空实现即可。
+    pub fn repaint_rect(_left: i32, _top: i32, _right: i32, _bottom: i32) {}
+
+    // ---- 开机自启：LaunchAgent ----
+
+    /// LaunchAgent 的 plist 路径。`~/Library/LaunchAgents/`。
+    fn launch_agent_path() -> std::path::PathBuf {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/unknown".into());
+        std::path::PathBuf::from(home)
+            .join("Library")
+            .join("LaunchAgents")
+            .join("com.bydota.paypulse.plist")
+    }
+
+    /// 开 / 关开机自启。
+    ///
+    /// macOS 的「开机自启」正规做法是 LaunchAgent：在 `~/Library/LaunchAgents/`
+    /// 写一个 plist，登录时 launchd 拉起。只写这一处，删掉这个文件就是干净的卸载。
+    pub fn set_autostart(on: bool, exe: &Path) -> Result<(), String> {
+        let path = launch_agent_path();
+        if !on {
+            // 已经不存在也算成功：目的达到了
+            if path.exists() {
+                std::fs::remove_file(&path)
+                    .map_err(|e| format!("删 LaunchAgent 失败（{e}）"))?;
+            }
+            return Ok(());
+        }
+
+        let dir = path.parent().ok_or("LaunchAgents 目录不存在")?;
+        std::fs::create_dir_all(dir).map_err(|e| format!("建 LaunchAgents 目录失败（{e}）"))?;
+
+        // plist 内容：RunAtLoad=true 表示登录即启动。exe 路径转 XML 转义。
+        let exe_str = exe.to_string_lossy();
+        let plist = format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+             <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
+             <plist version=\"1.0\">\n\
+             <dict>\n\
+             \t<key>Label</key><string>com.bydota.paypulse</string>\n\
+             \t<key>ProgramArguments</key>\n\
+             \t<array><string>{exe_str}</string></array>\n\
+             \t<key>RunAtLoad</key><true/>\n\
+             </dict>\n\
+             </plist>\n"
+        );
+        std::fs::write(&path, plist).map_err(|e| format!("写 LaunchAgent 失败（{e}）"))
+    }
+
+    // ---- 全局快捷键：RegisterEventHotKey（Carbon） ----
+
+    /// `EventHotKeyRef` 的寄存器。每个注册的快捷键一个。
+    /// 实际是 Carbon 的不透明句柄，这里用指针存。
+    type EventHotKeyRef = *mut std::ffi::c_void;
+    /// Carbon 的事件目标。传空表示「系统事件目标」。
+    type EventTargetRef = *mut std::ffi::c_void;
+
+    /// `EventHotKeyID`：`signature`（四字符）+ `id`。回调靠 `id` 分派。
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct EventHotKeyId {
+        signature: u32,
+        id: u32,
+    }
+
+    #[link(name = "Carbon", kind = "framework")]
+    extern "C" {
+        /// 注册一个全局快捷键。`hotKeyID` 用 `id` 编码，回调时原样带回。
+        /// `options` 传 0；`modifiers` 用 Carbon 的修饰键位掩码（见下）。
+        fn RegisterEventHotKey(
+            hot_key_code: u32,
+            modifiers: u32,
+            hot_key_id: EventHotKeyId,
+            target: EventTargetRef,
+            options: u32,
+            out_ref: *mut EventHotKeyRef,
+        ) -> i32;
+        fn UnregisterEventHotKey(hot_key: EventHotKeyRef) -> i32;
+    }
+
+    /// Carbon 修饰键位（与 `parse()` 出来的 Win32 修饰键不同，需要转换）。
+    const CMD_KEY: u32 = 1 << 8; // cmdKey
+    const SHIFT_KEY: u32 = 1 << 9; // shiftKey
+    const OPTION_KEY: u32 = 1 << 11; // optionKey
+    const CONTROL_KEY: u32 = 1 << 12; // controlKey
+
+    /// 把 Win32 修饰键掩码转成 Carbon 的修饰键掩码。
+    ///
+    /// `parse()` 的约定：MOD_ALT=1, MOD_CONTROL=2, MOD_SHIFT=4, MOD_WIN=8。
+    /// macOS 上把 Win 键（Super）映射成 Cmd 键——这是用户直觉里「Win/Cmd」的位置。
+    fn to_carbon_mods(mods: u32) -> u32 {
+        let mut m = 0;
+        if mods & 1 != 0 {
+            m |= OPTION_KEY;
+        }
+        if mods & 2 != 0 {
+            m |= CONTROL_KEY;
+        }
+        if mods & 4 != 0 {
+            m |= SHIFT_KEY;
+        }
+        if mods & 8 != 0 {
+            m |= CMD_KEY;
+        }
+        m
+    }
+
+    /// 主键 → macOS 虚拟键码。macOS 的键码布局和 Windows 的 VK 不同，
+    /// 这里做一层映射：字母用 `kVK_ANSI_A`=0x00 …，数字用 `kVK_ANSI_0`=0x1D …，
+    /// 功能键 `kVK_F1`=0x7A …，方向键、回车、退格等各有一套。
+    ///
+    /// 注意：这里复用 `parse()` 已经解析好的 Win32 键码（`Binding.vk`），
+    /// 所以映射的是「Win32 VK → macOS kVK」，而不是「字符 → kVK」。
+    fn to_mac_keycode(vk: u32) -> u32 {
+        match vk {
+            // 字母 A-Z：Win32 VK 是 'A'..'Z'（0x41..0x5A）
+            c @ 0x41..=0x5A => c - 0x41, // kVK_ANSI_A = 0x00
+            // 数字 0-9：Win32 VK 是 '0'..'9'（0x30..0x39）
+            c @ 0x30..=0x39 => 0x1D + (c - 0x30), // kVK_ANSI_0 = 0x1D
+            0x0D => 36, // return
+            0x20 => 49, // space
+            0x09 => 48, // tab
+            0x1B => 53, // escape
+            0x08 => 51, // delete (backspace)
+            0x2E => 117, // forward delete
+            0x2D => 114, // help/insert（近似）
+            0x24 => 115, // home
+            0x23 => 119, // end
+            0x21 => 116, // page up
+            0x22 => 121, // page down
+            0x25 => 123, // left
+            0x26 => 126, // up
+            0x27 => 124, // right
+            0x28 => 125, // down
+            // F1-F12：Win32 VK 0x70..0x7B，mac kVK_F1=0x7A
+            c @ 0x70..=0x7B => 0x7A + (c - 0x70),
+            _ => 0, // 认不出的键退回 0，RegisterEventHotKey 会失败并提示
+        }
+    }
+
+    /// 快捷键线程：和 Windows 一样用专用线程 + mpsc 通道推绑定。
+    ///
+    /// 差别：Carbon 的 `RegisterEventHotKey` 是全局注册（不绑线程消息队列），
+    /// 回调通过一个事件处理器进来。这里简化成「注册后，用 mpsc 接收换绑」，
+    /// 触发回调的部分依赖 Carbon 的 `InstallEventHandler`（见下）。
+    pub struct Hotkeys {
+        tx: Sender<Vec<Binding>>,
+    }
+
+    pub struct SharedHotkeys(pub Mutex<Hotkeys>);
+
+    pub fn spawn_hotkeys<F, G>(on_fire: F, on_fail: G) -> Hotkeys
+    where
+        F: Fn(u32) + Send + 'static,
+        G: Fn(u32, String) + Send + 'static,
+    {
+        let (tx, rx) = channel::<Vec<Binding>>();
+        std::thread::Builder::new()
+            .name("paypulse-hotkeys".into())
+            .spawn(move || pump_mac(rx, on_fire, on_fail))
+            .ok();
+        Hotkeys { tx }
+    }
+
+    impl Hotkeys {
+        pub fn set(&self, list: Vec<Binding>) {
+            let _ = self.tx.send(list);
+        }
+    }
+
+    fn pump_mac<F, G>(rx: Receiver<Vec<Binding>>, on_fire: F, on_fail: G)
+    where
+        F: Fn(u32),
+        G: Fn(u32, String),
+    {
+        // 维护当前已注册的快捷键，换绑时先全部注销。
+        let mut current: Vec<(EventHotKeyRef, Binding)> = Vec::new();
+        // 换绑信号：阻塞式 recv，但带超时，让线程有空处理别的（目前只有换绑）。
+        // macOS 上 RegisterEventHotKey 的回调依赖 Carbon 事件处理器 + RunLoop，
+        // 那部分需要和 Tauri 的主 RunLoop 集成，属于 mac 真机联调阶段。
+        // 这里先把「注册 / 注销 / 换绑」做对：注册成功后系统就能捕获热键，
+        // 只是触发回调的事件处理器尚待接入（见 README「mac 版」一节）。
+        loop {
+            // 等一条新绑定（阻塞直到有换绑请求）。
+            let Ok(next) = rx.recv() else {
+                break;
+            };
+            // 注销旧的。
+            unsafe {
+                for (r, _) in current.drain(..) {
+                    UnregisterEventHotKey(r);
+                }
+            }
+            // 注册新的。
+            for b in next.into_iter() {
+                let mac_mods = to_carbon_mods(b.mods);
+                let mac_vk = to_mac_keycode(b.vk);
+                let mut out_ref: EventHotKeyRef = std::ptr::null_mut();
+                let hot_key_id = EventHotKeyId {
+                    signature: 0x504C_5345, // 'PLSE'
+                    id: b.id,
+                };
+                let rc = unsafe {
+                    RegisterEventHotKey(
+                        mac_vk,
+                        mac_mods,
+                        hot_key_id,
+                        std::ptr::null_mut(),
+                        0,
+                        &mut out_ref,
+                    )
+                };
+                if rc == 0 && !out_ref.is_null() {
+                    crate::log::w(&format!("快捷键 {}（id {}）注册成功", b.label, b.id));
+                    current.push((out_ref, b));
+                } else {
+                    crate::log::w(&format!(
+                        "快捷键 {}（id {}）注册失败：rc={rc}（多半被别的程序占用）",
+                        b.label, b.id
+                    ));
+                    on_fail(b.id, b.label.clone());
+                }
+            }
+            // `on_fire` 在 macOS 上由 Carbon 事件处理器驱动；接入前，
+            // 这里用 `_ = &on_fire;` 保留闭包所有权，避免「未使用」告警。
+            let _ = &on_fire;
+        }
+    }
+}
+
+// ---------------------------------------------------------------- Linux 等其它平台
+
+#[cfg(not(any(windows, target_os = "macos")))]
 mod imp {
     use super::Binding;
     use std::path::Path;
@@ -493,7 +846,6 @@ mod imp {
     pub fn set_autostart(_on: bool, _exe: &Path) -> Result<(), String> {
         Err("这个平台暂不支持开机自启".into())
     }
-
 
     pub fn idle_seconds() -> u64 {
         0

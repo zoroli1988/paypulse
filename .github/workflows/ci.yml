@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ------------------------------------------------------------------
+  # 时钟库测试：纯函数、无 IO、不依赖私有引擎，任何平台都能跑。
+  # 这是开源部分「可独立验证」的底线——别人 fork 出去跑得动这一层。
+  # ------------------------------------------------------------------
+  clock:
+    name: 时钟库测试（Linux）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: 测试 paypulse-clock
+        run: cargo test --manifest-path paypulse-clock/Cargo.toml
+
+  # ------------------------------------------------------------------
+  # 外壳编译（Windows GNU 工具链）。
+  # 需要私有引擎 paypulse-core（git submodule），用仓库 secret
+  # `PAYPULSE_CORE_PAT`（一个有私有仓读取权限的 personal access token）
+  # 来拉取。没配 secret 时跳过这一步——公开仓库的贡献者看不到引擎，
+  # 外壳源码与时钟库仍可阅读、可测试。
+  # ------------------------------------------------------------------
+  shell-windows:
+    name: 外壳编译（Windows GNU）
+    runs-on: windows-latest
+    needs: clock
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.PAYPULSE_CORE_PAT }}
+
+      - name: 检查私有引擎是否就位
+        id: core
+        run: |
+          if (Test-Path "paypulse-core/src/lib.rs") {
+            Write-Output "present=true" >> $env:GITHUB_OUTPUT
+          } else {
+            Write-Output "present=false" >> $env:GITHUB_OUTPUT
+          }
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+        if: steps.core.outputs.present == 'true'
+
+      # GNU binutils 补丁（as / dlltool / windres / windmc），见 app/README.md 3.2。
+      # 从 msys2 拉同一套 binutils 放进 app/tools/genv/bin/。
+      - name: 获取 GNU binutils
+        if: steps.core.outputs.present == 'true'
+        shell: bash
+        run: |
+          V=mingw-w64-x86_64-binutils-2.44-4-any.pkg.tar.zst
+          curl -sL -o /tmp/bu.zst "https://mirror.msys2.org/mingw/mingw64/$V"
+          mkdir -p app/tools/genv/bin /tmp/bu
+          tar -xf /tmp/bu.zst -C /tmp/bu
+          cp /tmp/bu/mingw64/bin/{as,dlltool,windres,windmc}.exe app/tools/genv/bin/
+
+      - name: 编译外壳
+        if: steps.core.outputs.present == 'true'
+        shell: bash
+        run: |
+          export PATH="$PWD/app/tools/genv/bin:$PATH"
+          cd app/src-tauri && cargo build
+
+  # ------------------------------------------------------------------
+  # 外壳编译（macOS）。
+  # 目的：验证 macOS 平台层（platform.rs 的 #[cfg(target_os="macos")]
+  # 分支）能编译。同样需要私有引擎，用 PAYPULSE_CORE_PAT 拉 submodule。
+  # ------------------------------------------------------------------
+  shell-macos:
+    name: 外壳编译（macOS）
+    runs-on: macos-latest
+    needs: clock
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.PAYPULSE_CORE_PAT }}
+
+      - name: 检查私有引擎是否就位
+        id: core
+        run: |
+          if [ -f "paypulse-core/src/lib.rs" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+        if: steps.core.outputs.present == 'true'
+
+      - name: 编译外壳（x86_64）
+        if: steps.core.outputs.present == 'true'
+        run: cd app/src-tauri && cargo build --target x86_64-apple-darwin
+
+      - name: 编译外壳（aarch64）
+        if: steps.core.outputs.present == 'true'
+        run: cd app/src-tauri && cargo build --target aarch64-apple-darwin

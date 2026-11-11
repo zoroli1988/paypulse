@@ -43,6 +43,12 @@ git clone --recurse-submodules git@github.com:zoroli1988/paypulse.git
 
 详见 [`app/README.md`](app/README.md) 的第三节（构建环境、四个坑与解法）。Windows 用 `x86_64-pc-windows-gnu` 工具链，需要补 GNU binutils（`as` / `dlltool` / `windres` / `windmc`），README 已写清从 msys2 获取的步骤。
 
+## 平台支持
+
+- **Windows**：完整实现（悬浮窗、托盘、开机自启、全局快捷键、空闲检测、边缘吸附、穿透）。
+- **macOS**：平台层已就位（`platform.rs` 的 `#[cfg(target_os = "macos")]` 分支），开机自启用 LaunchAgent、空闲检测用 CGEventSource、快捷键用 Carbon `RegisterEventHotKey`。**尚未在 macOS 真机验证**——编译与联调依赖 GitHub Actions 的 macOS runner（见 `.github/workflows/ci.yml` 的 `shell-macos`）。快捷键的触发回调（Carbon 事件处理器 + RunLoop 集成）是唯一待接入的部分。
+- **Linux**：平台功能退化为空实现（能编译，但开机自启/快捷键/空闲检测/吸附不可用）。
+
 ## License
 
 外壳与时钟库：AGPL-3.0，见 [`app/LICENSE`](app/LICENSE)。引擎私有，见私有仓 `paypulse-core`。

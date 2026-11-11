@@ -31,10 +31,12 @@ use serde::{Deserialize, Serialize};
 
 /// 客户端里硬编码的 Ed25519 公钥（hex，64 字节 = 32 字节公钥）。
 ///
-/// 这一版还没有正式发版，用的是**占位公钥**（全零），对应的私钥不存在——
-/// 所以任何清单都会验签失败。等真正要发版时，用 `tools/gen-update-key` 生成
-/// 一对密钥，把公钥填到这里、私钥离线收好。
-const UPDATE_PUBKEY_HEX: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+/// 公钥对应的私钥在发版机上离线保管，用 `app/tools/gen-key` 生成。
+/// 发版流程见 `.github/workflows/release.yml`。
+///
+/// ⚠️ 换公钥 = 老客户端再也验不过新清单。只在私钥泄露、必须轮换时改这里，
+/// 改完要发一个「带新公钥」的强制更新版本，否则所有旧版本都收不到后续更新。
+const UPDATE_PUBKEY_HEX: &str = "a6e3440073e853aa132996c467a5612d99ca69319495f80b99d1ab7b759da8df";
 
 /// 检查更新请求里的一个安装包条目。
 #[derive(Deserialize)]
@@ -120,11 +122,11 @@ fn semver_gt(a: &str, b: &str) -> bool {
     false
 }
 
-/// 公钥 hex → `VerifyingKey`。占位公钥（全零）会直接返回 None，让验签必然失败。
+/// 公钥 hex → `VerifyingKey`。全零（未配置）会返回 None，让验签必然失败。
 fn pubkey() -> Option<VerifyingKey> {
     let bytes = hex_decode(UPDATE_PUBKEY_HEX)?;
     if bytes.iter().all(|&b| b == 0) {
-        return None; // 占位公钥：还没配真正的发版密钥
+        return None; // 全零公钥：还没配真正的发版密钥
     }
     VerifyingKey::from_bytes(&bytes.try_into().ok()?).ok()
 }
@@ -292,9 +294,11 @@ mod tests {
     }
 
     #[test]
-    fn placeholder_pubkey_rejects_everything() {
-        // 占位公钥（全零）→ pubkey() 返回 None → 验签必然失败
-        assert!(pubkey().is_none());
+    fn pubkey_loads_from_configured_hex() {
+        // 公钥已配置（非全零），pubkey() 应该返回 Some
+        assert!(pubkey().is_some());
+        // 长度必须是 32 字节（64 hex 字符）
+        assert_eq!(UPDATE_PUBKEY_HEX.len(), 64);
     }
 
     #[test]

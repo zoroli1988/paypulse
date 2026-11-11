@@ -1,0 +1,149 @@
+name: Release
+
+# 发布流水线：打 tag（v0.1.0 这种）时触发。
+#
+# 流程：
+# 1. 拉私有引擎（submodule，用 PAYPULSE_CORE_PAT）
+# 2. 编译各平台安装包（Windows NSIS + macOS app）
+# 3. 用 UPDATE_SIGNING_KEY（Ed25519 私钥 hex，GitHub secret）给每个包签名
+# 4. 生成 manifest.json 并随安装包一起上传到 GitHub Releases
+#
+# 私钥只以 secret 形式出现，绝不出现在仓库/日志里。公钥已硬编码在
+# update.rs 的 UPDATE_PUBKEY_HEX。
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ------------------------------------------------------------------
+  # Windows 安装包
+  # ------------------------------------------------------------------
+  windows:
+    name: Windows 安装包
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.PAYPULSE_CORE_PAT }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+
+      # GNU binutils 补丁（见 app/README.md 3.2）
+      - name: 获取 GNU binutils
+        shell: bash
+        run: |
+          V=mingw-w64-x86_64-binutils-2.44-4-any.pkg.tar.zst
+          curl -sL -o /tmp/bu.zst "https://mirror.msys2.org/mingw/mingw64/$V"
+          mkdir -p app/tools/genv/bin /tmp/bu
+          tar -xf /tmp/bu.zst -C /tmp/bu
+          cp /tmp/bu/mingw64/bin/{as,dlltool,windres,windmc}.exe app/tools/genv/bin/
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: 安装前端依赖
+        run: cd app && npm install
+
+      - name: 编译安装包（NSIS）
+        shell: bash
+        run: |
+          export PATH="$PWD/app/tools/genv/bin:$PATH"
+          cd app && npx tauri build
+
+      - name: 上传安装包到 Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            app/src-tauri/target/release/bundle/nsis/*.exe
+            app/src-tauri/target/release/bundle/msi/*.msi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ------------------------------------------------------------------
+  # macOS 安装包（x86_64 + aarch64 通用，或分开）
+  # ------------------------------------------------------------------
+  macos:
+    name: macOS 安装包
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.PAYPULSE_CORE_PAT }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: 安装前端依赖
+        run: cd app && npm install
+
+      - name: 编译安装包（app + dmg）
+        run: cd app && npx tauri build
+
+      - name: 上传安装包到 Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            app/src-tauri/target/release/bundle/dmg/*.dmg
+            app/src-tauri/target/release/bundle/macos/*.app.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ------------------------------------------------------------------
+  # 生成 manifest.json（签名）+ 发布
+  # 依赖 Windows/macOS 编译完成，拿到 sha256 后签名。
+  # 这一版先做「Windows-only」的 manifest（mac 版尚未真机验证），
+  # 等 mac 版稳定后再把 darwin 包并进来。
+  # ------------------------------------------------------------------
+  manifest:
+    name: 生成 manifest 并发布
+    runs-on: ubuntu-latest
+    needs: [windows, macos]
+    if: ${{ secrets.UPDATE_SIGNING_KEY != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: 下载刚发布的安装包
+        uses: robinraju/release-downloader@v1.9
+        with:
+          latest: true
+          fileName: "*.exe"
+          tarBall: false
+          zipBall: false
+
+      - name: 生成 manifest.json
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          EXE=$(ls *.exe | head -1)
+          cd app/tools/make-manifest
+          cargo run --release -- \
+            --version "$VERSION" \
+            --channel stable \
+            --priv "${{ secrets.UPDATE_SIGNING_KEY }}" \
+            --pkg windows-x64 "../../../../$EXE" \
+            --out manifest.json
+          # 替换本地路径为 Release 下载 URL（需按仓库地址拼）
+          echo "manifest 已生成"
+
+      - name: 上传 manifest 到 Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          files: app/tools/make-manifest/manifest.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

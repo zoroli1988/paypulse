@@ -1,0 +1,14 @@
+[package]
+name = "gen-update-key"
+version = "0.1.0"
+edition = "2021"
+description = "发版机工具：生成检查更新的 Ed25519 密钥对。私钥离线保管，公钥填进 update.rs。"
+
+[[bin]]
+name = "gen-update-key"
+path = "src/main.rs"
+
+[dependencies]
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+rand = "0.8"
+hex = "0.4"
