@@ -87,6 +87,12 @@ git_net() {
   fi
 }
 
+# 判断是不是一个 git 工作副本。
+# ⚠️ 用 -e 不用 -d：子模块和 `git worktree` 的 .git 是个**文本文件**
+#    （内容形如 `gitdir: ../.git/modules/paypulse-core`），目录检查判不出来。
+#    2026-11-12 发 v0.1.4 时就被这个 -d 卡住过。
+is_repo() { [[ -e "$1/.git" ]]; }
+
 # revoke-help / gen-key 不需要 token；其余子命令及默认 push 都需要。
 CMD_PRE="${1:-push}"
 case "$CMD_PRE" in
@@ -95,8 +101,8 @@ case "$CMD_PRE" in
     if [[ -z "$TOKEN" ]]; then
       die "缺少 GITHUB_TOKEN 环境变量。\n  请先执行：export GITHUB_TOKEN=\"ghp_xxxx...\"\n  （PAT 生成入口：https://github.com/settings/tokens）"
     fi
-    [[ -d "$PUBLIC_DIR/.git"  ]] || die "找不到公开仓目录：$PUBLIC_DIR"
-    [[ -d "$PRIVATE_DIR/.git" ]] || die "找不到私有仓目录：$PRIVATE_DIR"
+    is_repo "$PUBLIC_DIR"  || die "找不到公开仓目录：$PUBLIC_DIR"
+    is_repo "$PRIVATE_DIR" || die "找不到私有仓目录：$PRIVATE_DIR"
     ;;
 esac
 
@@ -348,7 +354,7 @@ cmd_check_key() {
 cmd_scan_secrets() {
   local bad=0
   scan_secrets "$PUBLIC_DIR" "公开仓" || bad=$((bad + $?))
-  if [[ -d "$PRIVATE_DIR/.git" ]]; then
+  if is_repo "$PRIVATE_DIR"; then
     scan_secrets "$PRIVATE_DIR" "私有仓" || bad=$((bad + $?))
   fi
   echo
