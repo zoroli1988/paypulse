@@ -30,8 +30,39 @@ pub const LABEL: &str = "ask";
 /// 420×256。宽度按最长那行算：`按公司时间 UTC+8　北京 09:00 = 当地 10:00` 一行排得下。
 /// 高度是量出来的：标题栏 32 + 正文（标题 20 / 副标 17 / 对照表 69 / 提示 15）
 /// + 按钮 34 + 各处间距（14+4+11+9+12+16），合计 249，取 256 留 7px 余量。
+///
+/// 「补记」那一屏多一行对照，所以比时区那屏高 24px —— 每次 `show()` 之前
+/// 按 `kind` 设一次尺寸，两屏各自都是「刚好装下」。
 const ASK_W: f64 = 420.0;
-const ASK_H: f64 = 256.0;
+const ASK_H_TZ: f64 = 256.0;
+const ASK_H_FILL: f64 = 280.0;
+
+/// 这一窗要问的两件事。
+///
+/// 为什么挤在同一扇窗里：两件事的形状是一样的（摆一段事实、让用户选一个），
+/// 生命周期也一样（prewarm / close→hide）。为第二件事再复制一份窗口模块，
+/// 等于把同一套容易踩的坑（懒创建空白、close 后重建死锁）再踩一遍。
+///
+/// 用 `#[serde(tag)]` 打一个 `kind` 出去，前端据此选屏。
+#[derive(Clone, serde::Serialize)]
+#[serde(tag = "kind")]
+pub enum Payload {
+    /// 时区变了，按哪边算
+    #[serde(rename = "tz")]
+    Tz(AskView),
+    /// 这段没开机的时间算不算工
+    #[serde(rename = "fill")]
+    Fill(crate::fill::FillView),
+}
+
+impl Payload {
+    fn kind(&self) -> &'static str {
+        match self {
+            Payload::Tz(_) => "tz",
+            Payload::Fill(_) => "fill",
+        }
+    }
+}
 
 /// 给前端的一屏数据。
 ///
@@ -75,14 +106,32 @@ pub fn is_open(app: &AppHandle) -> bool {
 /// 注意它存的是**这一次问的那两个偏移**，不是「读现在的配置再算一遍」：
 /// 后者会把基准（`tz_off`）当成上次的时区，于是文案变成「比上次的 UTC+8 差 0 分」——
 /// 一个自问自答的空问题。第一版就是这么错的，锁屏截图上肉眼可见。
-static PENDING: Mutex<Option<AskView>> = Mutex::new(None);
+static PENDING: Mutex<Option<Payload>> = Mutex::new(None);
 
-/// 弹一次。`prev` / `now` 都是本地 UTC 偏移（秒）。
+/// 弹一次时区询问。`prev` / `now` 都是本地 UTC 偏移（秒）。
 pub fn ask(app: &AppHandle, prev: i32, now: i32) {
     let s = app.state::<crate::AppState>().settings();
-    let view = view_of(&s, prev, now);
+    show(app, Payload::Tz(view_of(&s, prev, now)), ASK_H_TZ);
+    crate::log::w(&format!(
+        "时区询问窗已弹出：{} → {}",
+        crate::tz_label(prev),
+        crate::tz_label(now)
+    ));
+}
+
+/// 弹一次补记询问。内容已经在 `fill::plan` 里算好了。
+pub fn ask_fill(app: &AppHandle, v: crate::fill::FillView) {
+    crate::log::w(&format!(
+        "补记询问窗已弹出：上次 {}，班次内 {}，折 {}",
+        v.from_label, v.covered_label, v.amount_label
+    ));
+    show(app, Payload::Fill(v), ASK_H_FILL);
+}
+
+/// 两个提问共用的「摆出来」那一段。
+fn show(app: &AppHandle, payload: Payload, h: f64) {
     if let Ok(mut g) = PENDING.lock() {
-        *g = Some(view.clone());
+        *g = Some(payload.clone());
     }
 
     let win = match app.get_webview_window(LABEL) {
@@ -90,28 +139,26 @@ pub fn ask(app: &AppHandle, prev: i32, now: i32) {
         None => {
             // 正常情况启动时就预热好了。走到这里说明预热失败，
             // 内容可能是白的，但至少给用户一个能点的东西。
-            crate::log::w("时区询问窗：没预热，现建（内容可能空白）");
+            crate::log::w("询问窗：没预热，现建（内容可能空白）");
             match build(app) {
                 Ok(w) => w,
                 Err(e) => {
-                    crate::log::w(&format!("时区询问窗创建失败：{e}"));
+                    crate::log::w(&format!("询问窗创建失败：{e}"));
                     return;
                 }
             }
         }
     };
 
+    // 两屏高度不同：先改尺寸再 show，否则会看到上一屏的高度闪一下。
+    let _ = win.set_size(tauri::LogicalSize::new(ASK_W, h));
+
     // 先发数据再显示：页面若刚起来监听还没挂上，这一发会丢，
     // 由页面加载完的 `ask_pull` 补上。
-    let _ = app.emit_to(LABEL, "ask", view);
+    let _ = app.emit_to(LABEL, "ask", payload);
     let _ = win.unminimize();
     let _ = win.show();
     let _ = win.set_focus();
-    crate::log::w(&format!(
-        "时区询问窗已弹出：{} → {}",
-        crate::tz_label(prev),
-        crate::tz_label(now)
-    ));
 }
 
 pub fn close(app: &AppHandle) {
@@ -131,7 +178,7 @@ pub fn prewarm(app: &AppHandle) {
 fn build(app: &AppHandle) -> tauri::Result<tauri::WebviewWindow> {
     let w = WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App("ask.html".into()))
         .title("时区变了 · 牛马薪动了！")
-        .inner_size(ASK_W, ASK_H)
+        .inner_size(ASK_W, ASK_H_TZ)
         .decorations(false)
         .transparent(true)
         .resizable(false)
@@ -146,10 +193,23 @@ fn build(app: &AppHandle) -> tauri::Result<tauri::WebviewWindow> {
         if let tauri::WindowEvent::CloseRequested { api, .. } = e {
             api.prevent_close();
             let _ = me.hide();
-            // 关掉也算「回答过了」：规格要的是「一次确认，不反复打扰」，
-            // 而用户点 × 的意思就是「别问了」。选择保持原样（跟随系统），
-            // 但基准时区要跟着更新，否则下一秒又会弹回来。
-            crate::tz_remember(me.app_handle(), crate::local_offset_sec());
+            // 点 × 也是一次回答，而且答的是「保持现状」：
+            //
+            // * 时区：继续跟随系统，但基准要跟着更新，否则下一秒又弹回来；
+            // * 补记：算进去（现状就是算着的），只记下今天问过了。
+            //
+            // 两件事都得有落脚点，否则同一个问题会在一分钟里问第二次。
+            let kind = PENDING
+                .lock()
+                .ok()
+                .and_then(|g| g.as_ref().map(|p| p.kind()));
+            match kind {
+                Some("tz") => {
+                    crate::tz_remember(me.app_handle(), crate::local_offset_sec());
+                }
+                Some("fill") => crate::fill::mark_answered(me.app_handle(), false, 0),
+                _ => {}
+            }
         }
     });
 
@@ -219,7 +279,7 @@ pub fn ask_answer(app: AppHandle, mode: String) {
 
 /// 页面加载完来要数据（事件比监听器先到的那条路）。
 #[tauri::command]
-pub fn ask_pull() -> Option<AskView> {
+pub fn ask_pull() -> Option<Payload> {
     PENDING.lock().ok().and_then(|g| g.clone())
 }
 

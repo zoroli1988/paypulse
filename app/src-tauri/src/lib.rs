@@ -28,6 +28,10 @@ use tauri::{Emitter, Manager};
 
 mod log;
 mod platform;
+mod sound;
+mod crash;
+mod fill;
+mod net;
 mod ask_win;
 mod detail;
 mod menu;
@@ -344,7 +348,15 @@ impl AppState {
 
     /// 退出前抢救一次：节流可能导致最后一次位移没落盘。
     fn flush(&self) {
-        let s = self.settings();
+        let now = chrono::Local::now().timestamp();
+        // 正常退出也刷一次「我还在」的时刻：下次启动的补记询问靠它算缺口。
+        // 只在已经落过盘的前提下写（`is_fresh` 为假），否则首启关掉程序
+        // 会凭空建出一个 settings.json，把「新用户」这件事抹掉。
+        let s = if self.is_fresh() {
+            self.settings()
+        } else {
+            self.mutate(|s| s.last_alive = Some(now))
+        };
         if let Err(e) = settings::save_to(&self.dir, &s) {
             eprintln!("退出前保存配置失败：{e}");
         }
@@ -1054,6 +1066,12 @@ fn observe(app: &tauri::AppHandle, st: &AppState, snap: &Snapshot, now: DateTime
                 };
                 acts.push(Act::Toast("今日已到账".into(), body, "ok"));
             }
+            // 音效与那条通知是**两个开关**：通知关掉、只留一声提示，是有人想要的
+            // （开会时屏幕上多一块东西比响一下更显眼）。但免打扰一定静音——
+            // 声音比通知卡更打扰，那条规矩更硬。
+            if !dnd {
+                sound::play(s.notify.sound, s.notify.volume);
+            }
             w.end_fired = true;
         }
 
@@ -1635,17 +1653,39 @@ fn spawn_snapper(app: tauri::AppHandle) {
 fn spawn_beacon(app: tauri::AppHandle) {
     std::thread::Builder::new()
         .name("paypulse-beacon".into())
-        .spawn(move || loop {
-            std::thread::sleep(std::time::Duration::from_millis(1_000));
-            let st = app.state::<AppState>();
-            let s = st.settings();
-            let now = clock(&s);
-            let snap = snapshot_at(now, &s);
-            tz_check(&app, &s);
-            let h = app.clone();
-            // 托盘 API 归主线程管：从这条线程直接调，轻则被忽略、重则把
-            // Windows 的消息循环拧在一起，所以统一甩回主线程执行。
-            let _ = app.run_on_main_thread(move || tray::sync_hint(&h, &snap));
+        .spawn(move || {
+            // 心跳只在内存里记「上一次写盘是什么时候」，不必落盘。
+            let mut beat: i64 = 0;
+            // 「补记」只在启动后问一次：它不是每秒都有可能发生的事。
+            let mut fill_asked = false;
+            loop {
+                std::thread::sleep(std::time::Duration::from_millis(1_000));
+                let st = app.state::<AppState>();
+                let s = st.settings();
+                let now = clock(&s);
+                let snap = snapshot_at(now, &s);
+                tz_check(&app, &s);
+                clock_watch(&app, &s);
+                heartbeat(&app, &mut beat);
+
+                // 只看第一拍：开机后那一秒，`last_alive` 还是上次退出时写的值。
+                // 再晚一点就该被心跳自己覆盖掉了。
+                if !fill_asked {
+                    fill_asked = true;
+                    if let Some(last) = s.last_alive {
+                        if !st.is_fresh() && !ask_win::is_open(&app) {
+                            if let Some(v) = fill::plan(&s, now, last) {
+                                ask_win::ask_fill(&app, v);
+                            }
+                        }
+                    }
+                }
+
+                let h = app.clone();
+                // 托盘 API 归主线程管：从这条线程直接调，轻则被忽略、重则把
+                // Windows 的消息循环拧在一起，所以统一甩回主线程执行。
+                let _ = app.run_on_main_thread(move || tray::sync_hint(&h, &snap));
+            }
         })
         .ok();
 }
@@ -1955,6 +1995,117 @@ fn close_extra(app: tauri::AppHandle) {
     }
 }
 
+/// 设置页里试听提示音。
+///
+/// 为什么由后端放而不是前端 `<audio>`：真正下班时那一声是 Rust 放的
+/// （见 `sound.rs` 的注释），试听若走另一条路，就可能出现「试听听得见、
+/// 到点不响」——那种分裂比不能试听糟得多。
+#[tauri::command]
+fn sound_preview(tone: String, volume: u32) {
+    let t = match tone.as_str() {
+        "soft" => settings::SoundTone::Soft,
+        "silent" => settings::SoundTone::Silent,
+        _ => settings::SoundTone::Crisp,
+    };
+    sound::play(t, volume);
+}
+
+/// 崩溃日志的状态：上次崩在什么时候、什么位置。
+///
+/// `Some` 才显示那一行。没有记录时（绝大多数情况）设置页整块不出现，
+/// 避免在隐私页上凭空多一行让人担心的东西。
+#[derive(Serialize)]
+struct CrashStatus {
+    /// `2026-11-12 10:20:31`
+    at: String,
+    /// `main.rs:123`
+    place: String,
+}
+
+#[tauri::command]
+fn crash_status() -> Option<CrashStatus> {
+    crash::last().map(|(at, place)| CrashStatus { at, place })
+}
+
+/// 抹掉崩溃日志。开了开关、崩过一次、自己看完，就该能一键清掉。
+#[tauri::command]
+fn crash_clear() -> Result<(), String> {
+    crash::clear()
+}
+
+/// 上一拍看到的「墙钟 + 开机时长」。
+///
+/// 两个读数必须成对存：只比墙钟看不出「是不是有人改了时间」，
+/// 只比开机时长看不出「过了多久」。
+static CLOCK_PROBE: Mutex<Option<(i64, u64)>> = Mutex::new(None);
+
+/// 墙钟走了 `wall` 秒、「开机以来」走了 `boot` 秒——两者应当一样。
+///
+/// 差超过 5 分钟就是有人动过钟（规格 02-D 给的阈值）。
+///
+/// `sleep_counts` 是这条判断能不能成立的关键：
+///
+/// * Windows 上「开机以来」用 `GetTickCount64`，它**包含睡眠时间**。
+///   于是合盖一夜再唤醒，两个读数一起跳 8 小时，差值为 0，不误报。
+/// * macOS / Linux 上只能用进程里的 `Instant`，它不含睡眠——唤醒那一刻
+///   墙钟跳、它不跳，看起来和「手动改时间」一模一样。所以那边**只认往回调**
+///   （单调时长的差值不会为负，往回调是它永远造不出来的现象）。
+fn clock_tampered(wall_sec: i64, boot_sec: i64, sleep_counts: bool) -> bool {
+    let d = wall_sec - boot_sec;
+    if sleep_counts {
+        d.abs() > 5 * 60
+    } else {
+        d < -5 * 60
+    }
+}
+
+/// 每秒查一次：时间被人动过就在今天盖一个「数据存疑」。
+fn clock_watch(app: &tauri::AppHandle, s: &Settings) {
+    let wall = Local::now().timestamp();
+    let boot = platform::uptime_ms() / 1000;
+    let prev = {
+        let Ok(mut g) = CLOCK_PROBE.lock() else { return };
+        let old = *g;
+        *g = Some((wall, boot));
+        old
+    };
+    let Some((pw, pb)) = prev else { return };
+
+    let sleep_counts = cfg!(windows);
+    if !clock_tampered(wall - pw, boot as i64 - pb as i64, sleep_counts) {
+        return;
+    }
+
+    let today = clock(s).date_naive().format("%Y-%m-%d").to_string();
+    if s.suspect.as_deref() == Some(today.as_str()) {
+        return;
+    }
+    crate::log::w(&format!(
+        "检测到系统时间被改动：墙钟走了 {} 秒、开机时长只走了 {} 秒 → {today} 标记数据存疑",
+        wall - pw,
+        boot as i64 - pb as i64
+    ));
+    app.state::<AppState>().mutate(|x| x.suspect = Some(today));
+}
+
+/// 「上次还活着」的心跳。
+///
+/// 每 60 秒写一次盘：太密等于拿 SSD 换一个没人看的字段，太疏则
+/// 「多久没开机」会多算好几分钟。首启（`fresh`）时一个字段都不写——
+/// `settings.json` 是否存在是「是不是新用户」的唯一判据，写一笔就把它毁了。
+fn heartbeat(app: &tauri::AppHandle, last: &mut i64) {
+    let now = Local::now().timestamp();
+    if now - *last < 60 {
+        return;
+    }
+    let st = app.state::<AppState>();
+    if st.is_fresh() {
+        return;
+    }
+    *last = now;
+    st.mutate(|s| s.last_alive = Some(now));
+}
+
 pub fn run() {
     let app = tauri::Builder::default()
         .setup(|app| {
@@ -1970,6 +2121,13 @@ pub fn run() {
             // 但它返回的是 `Settings::default()`——光看返回值分不出「新装机」和「配置损坏」。
             let fresh = !settings::settings_path(&dir).exists();
             let mut cfg = settings::load_from(&dir);
+
+            // 崩溃钩子要尽早装：`setup` 之后到窗口起来之前这段也可能崩。
+            // 装的时候还不看开关（开关在下面几行才读出来），钩子内部每次
+            // panic 时才读原子量，所以这里只负责「装上」。
+            crash::init(dir.clone());
+            crash::install();
+            crash::set_enabled(cfg.crash_log);
 
             // 启动时清一次过期暂停区间：不清会越攒越多，每次 tick 都要遍历一遍
             let mut spans = cfg.spans();
@@ -2147,6 +2305,39 @@ pub fn run() {
                 });
             }
 
+            // 调试用：`PAYPULSE_FILL=1` 直接把「好久不见」补记窗拉起来。
+            //
+            // 真触发要改 `last_alive` 到几天前、还得今天不是休息日——验版式不用这么费劲。
+            // 这里仍然走 `fill::plan` 的真实算法，只是把「上次还活着」硬塞成 3 天前，
+            // 所以窗口上的日期、缺口时长、折算金额都是算出来的，不是编的。
+            // 今天恰好是休息日/请假时 `plan` 会返回 None，那就什么都不弹（并写明原因）。
+            #[cfg(debug_assertions)]
+            if std::env::var("PAYPULSE_FILL").is_ok() {
+                let s = app.state::<AppState>().settings();
+                let now = clock(&s);
+                let last = now.timestamp() - 3 * 24 * 3600;
+                match fill::plan(&s, now, last) {
+                    Some(v) => ask_win::ask_fill(app.handle(), v),
+                    None => crate::log::w("补记窗钩子：今天是休息日或请假，plan 返回 None（预期内）"),
+                }
+            }
+
+            // 调试用：`PAYPULSE_UPDATE=1` 启动后跑一次真实的「检查更新」，结果写日志。
+            //
+            // 这一条是给 `Failed to fetch` 那个 bug 收尾用的：修复的关键是「改由原生
+            // 拉取」，而这件事只能在真机的 WinHTTP 栈上验——curl 通了不代表 WebView
+            // 之外也通。跑完看日志里那一行就知道是 200、是 HTTP 4xx、还是连不上。
+            #[cfg(debug_assertions)]
+            if std::env::var("PAYPULSE_UPDATE").is_ok() {
+                tauri::async_runtime::spawn(async move {
+                    let r = update::check_update(None).await;
+                    crate::log::w(&format!(
+                        "检查更新（钩子）：state={} latest={} msg={}",
+                        r.state, r.latest, r.message
+                    ));
+                });
+            }
+
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -2212,6 +2403,10 @@ pub fn run() {
             first_run,
             ask_win::ask_pull,
             ask_win::ask_answer,
+            fill::fill_answer,
+            sound_preview,
+            crash_status,
+            crash_clear,
             update::check_update,
             toast::toast_dismiss,
             toast::toast_pull
@@ -3061,5 +3256,26 @@ mod tests {
         assert_eq!(tray_hint(&r), "牛马薪动了！ 今天休息");
         // 休息时菜单栏退成一个 `¥`：位置不能空着，否则菜单栏会跳
         assert_eq!(tray_title(&r), "¥");
+    }
+
+    /// 「系统时间被改过」这条判据的两个方向都要钉住：
+    /// 一个是不该误报（睡眠），一个是必须抓到（手动调表）。
+    #[test]
+    fn clock_tampering_needs_a_five_minute_jump() {
+        // 两边一起走了 8 小时 = 合盖睡了一夜，不是改表
+        assert!(!clock_tampered(8 * 3600, 8 * 3600, true));
+        // 正常的一秒一拍
+        assert!(!clock_tampered(1, 1, true));
+        // 阈值内的小抖动（NTP 对时）不报
+        assert!(!clock_tampered(200, 60, true));
+        // 往后调一小时：墙钟跳了，开机时长没跳
+        assert!(clock_tampered(3_600, 60, true));
+        // 往回调一小时
+        assert!(clock_tampered(-3_600, 60, true));
+
+        // 非 Windows：Instant 不含睡眠，唤醒那一刻长得和「调表」一模一样，
+        // 所以只认往回调——那个方向是单调时钟永远造不出来的。
+        assert!(!clock_tampered(8 * 3600, 1, false), "睡眠不该被当成改表");
+        assert!(clock_tampered(-3_600, 1, false), "往回调必须抓到");
     }
 }

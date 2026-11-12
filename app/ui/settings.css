@@ -460,6 +460,12 @@ html, body {
 }
 .clr-box[hidden] { display: none; }
 
+/* `hidden` 属性要压过 `.set-row{display:flex}`。
+   浏览器的 UA 样式表里 `[hidden]{display:none}` 优先级低于类选择器，
+   于是「隐藏」的行照样会被 flex 排出来——崩溃日志那一行就踩过这个坑：
+   开关没开、一条记录都没有，页面上却多出一行空的「—　清空」。 */
+[hidden] { display: none !important; }
+
 /* 首启引导条已删除：首启改由独立窗口 onboard.html 承担（原型「03 首次引导」
    的四步向导 560×640）。原来那条绿色横幅只是把用户丢进七组设置里自己找月薪，
    和原型的「90 秒内完成配置」完全是两回事。 */

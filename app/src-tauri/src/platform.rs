@@ -169,6 +169,14 @@ mod imp {
     extern "system" {
         fn GetTickCount() -> u32;
         fn GetCurrentThreadId() -> u32;
+        /// 64 位版，且**把睡眠时间算进去**——这一点是「系统时间被改动」那条检测
+        /// 能成立的前提：合盖一夜再唤醒，它和墙钟一起跳，差值为 0，不会误报。
+        fn GetTickCount64() -> u64;
+    }
+
+    /// 开机以来的毫秒数（含睡眠）。
+    pub fn uptime_ms() -> u64 {
+        unsafe { GetTickCount64() }
     }
 
     #[link(name = "advapi32")]
@@ -608,6 +616,22 @@ mod imp {
     /// 不需要像 Windows 那样手动 `RedrawWindow`——空实现即可。
     pub fn repaint_rect(_left: i32, _top: i32, _right: i32, _bottom: i32) {}
 
+    /// 「开机以来」的毫秒数。
+    ///
+    /// macOS 上没有 `GetTickCount64` 的等价物可以直接链（`mach_continuous_time`
+    /// 要额外绑一个 `libSystem` 符号）。这里退一步用进程内的 `Instant`：
+    /// 调用方只关心**两次采样之间的差**，进程启动到第一次采样之间那段多算少算
+    /// 都不影响。
+    ///
+    /// 代价写清楚：`Instant` 在 macOS 上不含睡眠，所以唤醒那一刻它的差值会
+    /// 明显小于墙钟的差值。调用方（`clock_tampered`）因此在非 Windows 平台
+    /// 只认「往回调」，见那边的注释。
+    pub fn uptime_ms() -> u64 {
+        use std::sync::OnceLock;
+        static START: OnceLock<std::time::Instant> = OnceLock::new();
+        START.get_or_init(std::time::Instant::now).elapsed().as_millis() as u64
+    }
+
     // ---- 开机自启：LaunchAgent ----
 
     /// LaunchAgent 的 plist 路径。`~/Library/LaunchAgents/`。
@@ -869,6 +893,13 @@ mod imp {
         (0, 0)
     }
 
+    /// 进程内的「开机以来」近似值。理由见 macOS 那段。
+    pub fn uptime_ms() -> u64 {
+        use std::sync::OnceLock;
+        static START: OnceLock<std::time::Instant> = OnceLock::new();
+        START.get_or_init(std::time::Instant::now).elapsed().as_millis() as u64
+    }
+
     pub struct Hotkeys;
 
     pub struct SharedHotkeys(pub Mutex<Hotkeys>);
@@ -888,7 +919,7 @@ mod imp {
 
 pub use imp::{
     cursor_pos, idle_seconds, monitor_at, monitor_of, repaint_rect, set_autostart, spawn_hotkeys,
-    work_area, SharedHotkeys,
+    uptime_ms, work_area, SharedHotkeys,
 };
 
 #[cfg(test)]

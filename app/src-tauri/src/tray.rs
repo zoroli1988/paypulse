@@ -146,6 +146,12 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     let settings = MenuItemBuilder::with_id(ID_SETTINGS, "设置…").build(app)?;
     let quit = MenuItemBuilder::with_id(ID_QUIT, "退出").build(app)?;
 
+    // 原型 02-E 给托盘菜单标的是 220×260，但这一版**不做像素对齐**：
+    // 这扇菜单是系统原生菜单（Win32 TrackPopupMenu / NSMenu），尺寸由系统按
+    // 条目数、字号、DPI 自己算，Tauri/muda 没有给宽高的接口。硬要对齐只有一条路
+    // ——换成自绘窗口，代价是丢掉键盘导航、系统主题、屏幕边缘自动翻转，
+    // 为一个 52px 的偏差不值。要改就看这条注释，别在别处另起一套尺寸常量。
+    // （悬浮窗右键那扇自绘菜单是另一回事：它有明确尺寸，见 `menu.rs` 的 220×260。）
     let menu = MenuBuilder::new(app)
         .item(&show)
         .item(&size)

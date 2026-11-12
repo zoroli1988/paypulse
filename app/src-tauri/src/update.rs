@@ -6,13 +6,17 @@
 //! 安装包（放 GitHub Releases，走 CDN）、一个灰度百分比。没有用户表、没有
 //! 数据库、没有登录态——「检查更新」只回答「有没有新版本」这一个问题。
 //!
-//! ## 为什么网络请求放前端、验签放这里
+//! ## 为什么网络请求放在这里，而不是前端 `fetch`
 //!
-//! - **拉清单在前端**：`fetch` 走 WebView2 的 HTTP 栈，Rust 侧不引 reqwest
-//!   （那个库在 `x86_64-pc-windows-gnu` 工具链下会拉一整套 tokio + hyper，
-//!   又撞「raw-dylib 缺 binutils」的墙）。前端把清单**原文**整段传过来。
-//! - **验签在这里**：Ed25519 公钥硬编码在本文件。前端是用户能改的那一侧，
-//!   把验签放前端等于把「防中间人替换清单」这扇门拆了。
+//! 最初是前端 `fetch()` 拉清单，实测在用户机器上只得到一句 **`Failed to fetch`**。
+//! 根因是同源策略：清单挂在 GitHub Releases，`github.com/.../download/...`
+//! 会 302 到 `objects.githubusercontent.com`，而那个域不带 CORS 头，
+//! WebView 的 `fetch` 于传输层直接失败——连 HTTP 状态码都拿不到，所以上一版
+//! 连「404 还是断网」都分不出来。
+//!
+//! 现在改由 `net.rs` 在原生侧发这一个 GET：没有同源策略，能跟随重定向，
+//! 能报出「HTTP 404 / 连不上 / 证书错」的区别。**验签仍然在这里**——前端是
+//! 用户能改的那一侧，把验签放前端等于把「防中间人替换清单」这扇门拆了。
 //!
 //! ## 威胁模型（不自我感动）
 //!
@@ -37,6 +41,15 @@ use serde::{Deserialize, Serialize};
 /// ⚠️ 换公钥 = 老客户端再也验不过新清单。只在私钥泄露、必须轮换时改这里，
 /// 改完要发一个「带新公钥」的强制更新版本，否则所有旧版本都收不到后续更新。
 const UPDATE_PUBKEY_HEX: &str = "bea83f4eba178479cf0352ea61b20bbee91b983682cd36adefb1975e91124695";
+
+/// 清单地址。`releases/latest/download/<asset>` 会 302 到「当前最新 release 的
+/// 同名资产」——这样客户端不必知道版本号，也不用调 GitHub API。
+///
+/// 为什么不是 `raw.githubusercontent.com`：那个域虽然带 CORS 头（上一版就是为了
+/// 这个换过去的），但它在国内经常被 DNS 污染；`github.com` 本身反而更通。
+/// 现在请求走原生侧，CORS 不再是约束，就该选「用户那边更容易连上」的那个。
+pub const UPDATE_URL: &str =
+    "https://github.com/zoroli1988/paypulse/releases/latest/download/manifest.json";
 
 /// 检查更新请求里的一个安装包条目。
 #[derive(Deserialize)]
@@ -187,11 +200,45 @@ pub fn verify_package(bytes: &[u8], expect_sha256: &str) -> bool {
 
 /// 「检查更新」命令入口。
 ///
-/// `manifest_json` 是前端 `fetch` 到的清单**原文**；`platform` / `arch` 由前端
-/// 按 `navigator.userAgent` 或 Rust 侧 `std::env::consts` 填好。实际上平台/架构
-/// 该由 Rust 侧自己定（前端不可信），这里用 `std::env::consts::{OS, ARCH}`。
+/// 网络这一半在 `net.rs`（原生 GET，不受同源策略约束），验签与比较在这一半。
+///
+/// `manifest_json` 保留成可选：单测和调试时可以直接喂一段清单跳过网络，
+/// 正常调用不传，由这里自己去拉。
 #[tauri::command]
-pub fn check_update(manifest_json: String) -> UpdateResult {
+pub async fn check_update(manifest_json: Option<String>) -> UpdateResult {
+    let text = match manifest_json {
+        Some(t) => t,
+        None => {
+            let url = UPDATE_URL.to_string();
+            // 网络等待不能占着命令线程：15 秒换一个「检查失败」，
+            // 界面上那颗按钮还得能转圈。
+            match tauri::async_runtime::spawn_blocking(move || crate::net::get(&url, 12_000)).await {
+                Ok(Ok(t)) => t,
+                Ok(Err(e)) => return failed(&e),
+                Err(e) => return failed(&format!("检查更新没能启动：{e}")),
+            }
+        }
+    };
+    evaluate(&text)
+}
+
+/// 拉不到清单时的返回。`state = "error"` 时设置页显示 `message` 原文，
+/// 所以要写人话：「连不上更新服务器」而不是 `ERROR_WINHTTP_CANNOT_CONNECT`。
+fn failed(msg: &str) -> UpdateResult {
+    UpdateResult {
+        state: "error".into(),
+        current: env!("CARGO_PKG_VERSION").to_string(),
+        latest: String::new(),
+        forced: false,
+        sha256: String::new(),
+        url: String::new(),
+        size: 0,
+        message: msg.to_string(),
+    }
+}
+
+/// 拿到清单原文之后的全部判断：验签 → 取本平台包 → 比版本 → 强制更新。
+fn evaluate(manifest_json: &str) -> UpdateResult {
     let current = env!("CARGO_PKG_VERSION").to_string();
     let platform = std::env::consts::OS; // "windows" / "macos" / "linux"
     let arch = std::env::consts::ARCH; // "x86_64" / "aarch64"
@@ -207,7 +254,7 @@ pub fn check_update(manifest_json: String) -> UpdateResult {
         message: String::new(),
     };
 
-    let manifest: Manifest = match serde_json::from_str(&manifest_json) {
+    let manifest: Manifest = match serde_json::from_str(manifest_json) {
         Ok(m) => m,
         Err(e) => {
             r.message = format!("清单解析失败：{e}");
@@ -301,9 +348,21 @@ mod tests {
         assert_eq!(UPDATE_PUBKEY_HEX.len(), 64);
     }
 
+    /// 单测只测「拿到清单之后」那半截（`evaluate` 是纯函数）。
+    /// `check_update` 本身是 async 且要联网，不在这里跑。
     #[test]
     fn malformed_manifest_returns_error() {
-        let r = check_update("not json".into());
+        let r = evaluate("not json");
         assert_eq!(r.state, "error");
+    }
+
+    /// 拉不到清单时要给人话，不能把 WinHTTP 的错误码直接甩到界面上。
+    #[test]
+    fn network_failure_message_is_human_readable() {
+        let r = failed("连不上更新服务器，请检查网络或系统代理设置");
+        assert_eq!(r.state, "error");
+        assert!(r.message.contains("连不上"));
+        // 版本号仍然要带着，界面「当前版本」那行不能空
+        assert_eq!(r.current, env!("CARGO_PKG_VERSION"));
     }
 }

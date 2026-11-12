@@ -2,29 +2,31 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8" />
-<title>时区变了 · 牛马薪动了！</title>
+<title>牛马薪动了！</title>
 <link rel="stylesheet" href="ask.css" />
 </head>
 <body>
-<!-- 时区变了：出差落地、系统时区跨了 2 小时以上才会弹的**一次性**询问。
-     规格 02-B 原文：「以设备当前时区解释作息表；若变更超过 2 小时，弹窗询问
-     「按哪边算」，一次确认，不反复打扰。」
+<!-- 这扇窗现在承载两个提问，形状一样（摆一段事实 + 让用户选一个）：
 
-     两个数必须都摆出来，而且摆的是**换算后的时刻**：
-     只写「跟随系统 / 固定 UTC+8」是在问一个抽象问题，用户答不上来；
-     写「当地 09:00 = 北京 08:00」他才看得懂自己在选什么。
+     ① 时区变了 —— 规格 02-B：「以设备当前时区解释作息表；若变更超过 2 小时，
+        弹窗询问『按哪边算』，一次确认，不反复打扰。」
+     ② 这段没开机的时间算不算工 —— 规格 02-D「长时间未启动：启动时按上次退出
+        时间补算，弹一次确认：是否按 xx 补记，一键采纳或跳过。」
 
-     这扇窗没有原型稿（原型只写了上面那一行规格）。版式照 onboarding 那套
-     窗口语言做：32px 标题栏、#141820 面板、11.5px 副标、34px 按钮，
-     尺寸按内容定 420×256。 -->
+     两屏都在这里，靠 Rust 传来的 `kind` 切。为什么挤一扇窗：生命周期完全一样
+     （启动预热、close→hide），复制第二份窗口模块等于把同一套坑再踩一遍。
+
+     这扇窗没有原型稿（原型对两件事各只写了一行规格）。版式照 onboarding 那套
+     窗口语言做：32px 标题栏、#141820 面板、11.5px 副标、34px 按钮。 -->
 <div class="app">
-  <div class="bar" data-tauri-drag-region>
+  <div class="bar">
     <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
-    <span class="bt">时区变了</span>
+    <span class="bt" id="barTitle">时区变了</span>
     <button class="x" id="closeBtn" title="关掉（保持现状）">✕</button>
   </div>
 
-  <div class="body">
+  <!-- ① 时区 -->
+  <div class="body" id="paneTz">
     <div class="h">今天按哪边的钟算？</div>
     <div class="sub" id="sub">系统时区是 UTC+9，比上次的 UTC+8 早 1 小时。</div>
 
@@ -46,7 +48,32 @@
       <button class="btn-p" id="pickCompany">按公司时间（UTC+8）</button>
     </div>
   </div>
+
+  <!-- ② 补记 -->
+  <div class="body" id="paneFill" hidden>
+    <div class="h">这段没开机的时间，算不算工？</div>
+    <div class="sub" id="fillSub">上次退出是 11-09 18:32，到现在 3 天 15 小时。</div>
+
+    <div class="cmp">
+      <div class="row">
+        <span class="k">其中落在班次内</span>
+        <span class="v mono" id="fillCovered">2 小时 10 分</span>
+      </div>
+      <div class="row">
+        <span class="k">按日薪折算</span>
+        <span class="v mono" id="fillAmount">¥106.42</span>
+      </div>
+    </div>
+
+    <div class="hint">选「不算」会把这几天记成暂停，金额当场回落。一天只问一次。</div>
+
+    <div class="acts">
+      <button class="btn-g" id="pickSkip">不算，记为暂停</button>
+      <button class="btn-p" id="pickCount">算进去</button>
+    </div>
+  </div>
 </div>
+<script src="drag.js"></script>
 <script src="ask.js"></script>
 </body>
 </html>

@@ -69,7 +69,8 @@
     hotkey: { enabled: true, show: "Ctrl+Shift+P", passthru: "Ctrl+Shift+L", clock: "Ctrl+Shift+Enter", extra: "Ctrl+Shift+E" },
     notify: {
       end: "amountwork", lunch: true, lunch_before: 10, sit: true, sit_min: 60,
-      dnd: true, dnd_from: "19:00", dnd_to: "08:30"
+      dnd: true, dnd_from: "19:00", dnd_to: "08:30",
+      sound: "crisp", volume: 40
     },
     idle_now_sec: 132,
     accent: "#35E07F",
@@ -90,7 +91,9 @@
     per_sec_yuan: 0.014447,
     version: "0.1.0",
     data_dir: "C:\\Users\\zorol\\AppData\\Roaming\\com.bydota.paypulse",
-    paused: false
+    paused: false,
+    crash_log: false,
+    crash_path: "C:\\Users\\zorol\\AppData\\Roaming\\com.bydota.paypulse\\crash.log"
   };
 
   // ?ot=paid / ?leave=1 / ?size=expanded / ?thru=1 / ?theme=light / ?bonus=none
@@ -128,6 +131,13 @@
           var fresh = new URLSearchParams(location.search).get("welcome") === "1";
           return Promise.resolve(fresh && !saved);
         }
+        // ?crash=1 用来拍「崩溃日志有记录」那一行
+        if (cmd === "crash_status") {
+          var want = new URLSearchParams(location.search).get("crash") === "1";
+          return Promise.resolve(want ? { at: "2026-11-11 20:33:07", place: "lib.rs:1188" } : null);
+        }
+        if (cmd === "crash_clear") return Promise.resolve(null);
+        if (cmd === "sound_preview") return Promise.resolve(null);
         return Promise.resolve(null);
       }
     },

@@ -4,10 +4,13 @@
 <meta charset="UTF-8" />
 <title>菜单</title>
 <style>
-/* ---- 悬浮窗右键的自绘菜单，208 × 204 ----
+/* ---- 悬浮窗右键的自绘菜单，220 × 260 ----
    替代原生 Menu::popup：原生在 Windows 上只能是浅色灰底，跟深色悬浮窗不搭。
    这里按原型 01-D 画深色五项，与悬浮窗同一套玻璃视觉。
-   主题跟应用走。 */
+   主题跟应用走。
+
+   尺寸对齐原型 02-E 的 220×260。菜单项用 flex 均分高度（不再写死 36px），
+   这样窗口高度怎么变都不会把最后一项挤出可视区——旧版 204 高就挤出过。 */
 
 :root {
   --mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
@@ -44,9 +47,9 @@ html, body {
 }
 
 .card {
-  width: 208px;
-  height: 204px;
-  padding: 7px;
+  width: 220px;
+  height: 260px;
+  padding: 8px;
   border-radius: 12px;
   background: var(--bg);
   border: 1px solid var(--line);
@@ -59,11 +62,14 @@ html, body {
   gap: 2px;
 }
 
+/* flex: 1 让五项均分剩余高度——窗口高度变化时不会溢出裁切。
+   min-height 兜住字号放大（系统「文字大小」调大）时文字被压扁。 */
 .item {
   display: flex;
   align-items: center;
   gap: 9px;
-  height: 36px;
+  flex: 1 1 0;
+  min-height: 32px;
   padding: 0 10px;
   border-radius: 8px;
   font-size: 13px;
@@ -99,6 +105,7 @@ html, body {
 }
 
 .sep {
+  flex: none;
   height: 1px;
   margin: 3px 6px;
   background: var(--line);

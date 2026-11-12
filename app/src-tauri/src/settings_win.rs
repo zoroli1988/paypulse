@@ -25,6 +25,11 @@ use tauri::{AppHandle, Manager};
 /// 设置窗口的标签。和悬浮窗的 `hud` 区分开——窗口位置记忆只认 `hud`。
 pub const LABEL: &str = "settings";
 
+/// 窗口尺寸：规格 02-E 的界面清单里写死的数。居中计算与建窗共用这一份，
+/// 免得两处各写一个数字、改了一处忘了另一处（居中就会偏）。
+const WIN_W: f64 = 900.0;
+const WIN_H: f64 = 640.0;
+
 // ---------------------------------------------------------------- 视图
 
 /// 作息那一块的展示值。
@@ -120,6 +125,10 @@ pub struct NotifyView {
     pub dnd: bool,
     pub dnd_from: String,
     pub dnd_to: String,
+    /// crisp / soft / silent
+    pub sound: String,
+    /// 0–100
+    pub volume: u32,
 }
 
 /// 设置界面需要的全部内容。
@@ -182,6 +191,10 @@ pub struct SettingsView {
     pub version: String,
     pub data_dir: String,
     pub paused: bool,
+    /// 崩溃日志开关（默认关）
+    pub crash_log: bool,
+    /// 崩溃日志文件的位置。开着的时候显示出来——用户有权知道它写在哪。
+    pub crash_path: String,
 }
 
 fn hm(min: u32) -> String {
@@ -359,6 +372,13 @@ fn view(app: &AppHandle) -> SettingsView {
             dnd: s.notify.dnd,
             dnd_from: hm(s.notify.dnd_from_min),
             dnd_to: hm(s.notify.dnd_to_min),
+            sound: match s.notify.sound {
+                crate::settings::SoundTone::Crisp => "crisp",
+                crate::settings::SoundTone::Soft => "soft",
+                crate::settings::SoundTone::Silent => "silent",
+            }
+            .to_string(),
+            volume: s.notify.volume,
         },
         idle_now_sec: crate::platform::idle_seconds(),
 
@@ -388,6 +408,10 @@ fn view(app: &AppHandle) -> SettingsView {
         version: env!("CARGO_PKG_VERSION").to_string(),
         data_dir: dir.display().to_string(),
         paused: paypulse_clock::is_paused(&s.spans()),
+        crash_log: s.crash_log,
+        crash_path: crate::crash::path()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| dir.join("crash.log").display().to_string()),
     }
 }
 
@@ -478,6 +502,13 @@ pub struct Patch {
     notify_dnd: Option<bool>,
     notify_dnd_from: Option<String>,
     notify_dnd_to: Option<String>,
+    /// 下班提示音：crisp / soft / silent
+    notify_sound: Option<String>,
+    /// 音量 0–100
+    notify_volume: Option<u32>,
+
+    /// 崩溃日志开关（默认关）
+    crash_log: Option<bool>,
 
     /// 清除数据：`today` / `month` / `all`。
     ///
@@ -797,6 +828,21 @@ fn merge(s: &mut Settings, patch: &Patch, today: NaiveDate) {
     if let Some(v) = patch.notify_dnd_to.as_deref().and_then(parse_hm) {
         s.notify.dnd_to_min = v;
     }
+    if let Some(v) = &patch.notify_sound {
+        s.notify.sound = match v.as_str() {
+            "soft" => crate::settings::SoundTone::Soft,
+            "silent" => crate::settings::SoundTone::Silent,
+            _ => crate::settings::SoundTone::Crisp,
+        };
+    }
+    if let Some(v) = patch.notify_volume {
+        s.notify.volume = v.min(100);
+    }
+
+    // ---- 隐私 ----
+    if let Some(v) = patch.crash_log {
+        s.crash_log = v;
+    }
 
     // ---- 清除数据 ----
     //
@@ -903,6 +949,15 @@ pub fn apply_settings(app: AppHandle, patch: Patch) -> SettingsView {
             let _ = win.set_ignore_cursor_events(after.click_through);
         }
     }
+    // 崩溃日志是**进程状态**：开关只是改了配置，钩子里读的是那个原子量。
+    // 不同步的话，用户开了开关、崩了一次，磁盘上照样什么都没有。
+    if patch.crash_log.is_some() {
+        crate::crash::set_enabled(after.crash_log);
+        crate::log::w(&format!(
+            "崩溃日志：{}",
+            if after.crash_log { "开" } else { "关" }
+        ));
+    }
     // 开机自启是**系统状态**，不是我们的一个字段：改完必须真的写进注册表。
     // 只写了配置不写注册表，用户会看到开关是开的、开机却没起来——
     // 这种「看起来生效了」的谎最难查。
@@ -948,8 +1003,20 @@ pub fn apply_settings(app: AppHandle, patch: Patch) -> SettingsView {
 }
 
 /// 打开（或唤到前台）设置窗口。
+///
+/// **每次都重新居中**，不是只在建窗时居中一次。
+///
+/// 旧版只有 `build()` 里的 `.center()`，而窗口是启动时预热的——那一次居中之后
+/// 位置就定死了。用户把悬浮窗拖到另一块屏（或只是拖到右下角）再点「设置」，
+/// 设置窗还待在开机时那块屏的原位，看起来就是「没居中」，甚至不在用户正看的那块屏。
+///
+/// 居中的基准是**悬浮窗所在那块屏**而不是主屏：用户刚拖过悬浮窗，注意力就在那儿。
 pub fn open(app: &AppHandle) -> tauri::Result<()> {
     if let Some(w) = app.get_webview_window(LABEL) {
+        // 先摆位置再 show：反过来会看到窗口先在旧位置闪一下再跳。
+        if let Some((x, y)) = center_on_hud(app) {
+            let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
+        }
         let _ = w.unminimize();
         let _ = w.show();
         let _ = w.set_focus();
@@ -961,10 +1028,60 @@ pub fn open(app: &AppHandle) -> tauri::Result<()> {
     crate::log::w("设置窗口：没预热，现建（内容可能空白）");
     let _ = build(app)?;
     if let Some(w) = app.get_webview_window(LABEL) {
+        if let Some((x, y)) = center_on_hud(app) {
+            let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
+        }
         let _ = w.show();
         let _ = w.set_focus();
     }
     Ok(())
+}
+
+/// 算出「悬浮窗那块屏的工作区正中间」的物理坐标。
+///
+/// 三个坑都在这里一次踩平：
+///  1. 用**工作区**不用屏幕矩形——否则 640 高的窗口在 1080p + 任务栏的屏上，
+///     视觉重心会偏下，用户还是会觉得没居中；
+///  2. 尺寸按**目标屏**的缩放算，不读窗口当前的 `outer_size()`——窗口现在可能
+///     在 100% 的屏上（物理 900），要搬去 150% 的屏（该是 1350），
+///     照旧值算就会偏左上一大截；
+///  3. 悬浮窗没了（用户关掉了）就退回主屏，不能什么都不做。
+fn center_on_hud(app: &AppHandle) -> Option<(i32, i32)> {
+    let hud = app.get_webview_window(crate::HUD_LABEL);
+    let mon = hud
+        .as_ref()
+        .and_then(|h| h.current_monitor().ok().flatten())
+        .or_else(|| app.primary_monitor().ok().flatten())?;
+
+    // `hwnd()` 是 Windows 专属；macOS/Linux 上 work_area 走 current_monitor，传 0 即可。
+    #[cfg(target_os = "windows")]
+    let hwnd = hud
+        .as_ref()
+        .and_then(|h| h.hwnd().ok())
+        .map(|h| h.0 as isize)
+        .unwrap_or(0);
+    #[cfg(not(target_os = "windows"))]
+    let hwnd: isize = 0;
+
+    let (left, top, right, bottom) = crate::platform::work_area(hwnd).unwrap_or_else(|| {
+        let mp = mon.position();
+        let ms = mon.size();
+        (mp.x, mp.y, mp.x + ms.width as i32, mp.y + ms.height as i32)
+    });
+
+    Some(centered_in((left, top, right, bottom), mon.scale_factor()))
+}
+
+/// 工作区 + 缩放 → 窗口左上角的物理坐标。纯函数，单测直接打这里。
+fn centered_in(area: (i32, i32, i32, i32), scale: f64) -> (i32, i32) {
+    let (left, top, right, bottom) = area;
+    let wpx = (WIN_W * scale).round() as i32;
+    let hpx = (WIN_H * scale).round() as i32;
+    // 屏幕比窗口还小时贴左上，别算出负数把标题栏甩到屏幕外（那时就拖不回来了）。
+    (
+        left + ((right - left - wpx) / 2).max(0),
+        top + ((bottom - top - hpx) / 2).max(0),
+    )
 }
 
 /// 启动时把设置窗口建好藏着：和通知窗、右键菜单窗、今日明细窗一样，
@@ -984,7 +1101,10 @@ fn build(app: &AppHandle) -> tauri::Result<tauri::WebviewWindow> {
         tauri::WebviewUrl::App("settings.html".into()),
     )
     .title("设置 · 牛马薪动了！")
-    .inner_size(980.0, 720.0)
+    // 900×640：规格 02-E 的界面清单里写死的数。之前做成了 980×720，
+    // 那是「先能放下再说」的结果——七组内容确实塞得进 980，但一台 1366×768
+    // 的笔记本上它会把任务栏顶掉半截。按规格收回 900×640，内容用滚动兜底。
+    .inner_size(WIN_W, WIN_H)
     // 去掉系统标题栏：Win11 的原生标题栏是浅色的，盖在这张深色窗口上像贴了张纸。
     // 代价有两个，都自己补：阴影画在 .app 上，尺寸锁死——
     // 没有标题栏的窗口没有可抓的边框，「能拉」只是一个拉不动的谎。
@@ -1021,6 +1141,36 @@ fn build(app: &AppHandle) -> tauri::Result<tauri::WebviewWindow> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 1920×1080 屏，扣掉 40px 任务栏 → 工作区 1920×1040，100% 缩放。
+    /// 900×640 的窗口居中后左上角应在 (510, 200)，四边留白左右各 510、上下各 200。
+    #[test]
+    fn centers_in_the_work_area_not_the_screen() {
+        assert_eq!(centered_in((0, 0, 1920, 1040), 1.0), (510, 200));
+    }
+
+    /// 150% 缩放：窗口物理尺寸是 1350×960，屏幕 2880×1700。
+    /// 这里最容易错的是拿窗口**当前**的 outer_size（可能是 900）去算，
+    /// 那样会得出 (990, 220)，搬到 150% 的屏上就明显偏左上。
+    #[test]
+    fn uses_target_monitor_scale_not_current_window_size() {
+        assert_eq!(centered_in((0, 0, 2880, 1700), 1.5), (765, 370));
+    }
+
+    /// 第二块屏从 x=1920 开始，居中结果必须跟着这块屏的坐标走，不能退化成主屏坐标。
+    #[test]
+    fn second_monitor_origin_is_respected() {
+        let (x, y) = centered_in((1920, 0, 3840, 1040), 1.0);
+        assert_eq!(x, 1920 + 510);
+        assert_eq!(y, 200);
+    }
+
+    /// 屏幕比窗口还小（800×600 的老机器）：贴左上，不能算出负数。
+    /// 负坐标会把标题栏甩到屏幕外，那时连拖都拖不回来。
+    #[test]
+    fn tiny_screen_pins_to_top_left_instead_of_going_negative() {
+        assert_eq!(centered_in((0, 0, 800, 600), 1.0), (0, 0));
+    }
 
     #[test]
     fn time_strings_parse_both_ways() {

@@ -4,10 +4,13 @@
 <meta charset="UTF-8" />
 <title>今日明细</title>
 <style>
-/* ---- 一张「看一眼就走」的今日账目，360 × 460 ----
+/* ---- 一张「看一眼就走」的今日账目，360 × 420（规格 02-E）----
    原型稿里「今日明细」只有一行字没画界面，这里按现有视觉语言补：
    深色玻璃、18 圆角、绿色主强调、等宽数字，和 extra 窗同一套变量。
-   主题跟应用走（打开时问一次 get_settings），不自己猜系统。 */
+   主题跟应用走（打开时问一次 get_settings），不自己猜系统。
+
+   高度从 460 收到 420 之后，三段明细不再各占一块固定高度，
+   而是整块中间区滚动（.mid）——多段午休加班不会把页脚顶出窗口。 */
 
 :root {
   --mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
@@ -47,8 +50,8 @@ html, body {
 
 .card {
   width: 360px;
-  height: 460px;
-  padding: 16px 18px 14px;
+  height: 420px;
+  padding: 13px 18px 11px;
   border-radius: 18px;
   background: var(--bg);
   border: 1px solid var(--line);
@@ -70,7 +73,7 @@ html, body {
 
 /* 主账：今日已赚 */
 .big {
-  margin-top: 14px;
+  margin-top: 11px;
   display: flex;
   align-items: baseline;
   gap: 6px;
@@ -89,7 +92,7 @@ html, body {
 
 /* 口径参考一行 */
 .ref {
-  margin-top: 12px;
+  margin-top: 9px;
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 6px;
@@ -106,7 +109,7 @@ html, body {
 
 /* 双账分列：白干价值 */
 .shadow {
-  margin-top: 12px;
+  margin-top: 9px;
   padding: 10px 12px;
   border-radius: 10px;
   background: rgba(255, 176, 32, .07);
@@ -125,9 +128,37 @@ html, body {
   font-variant-numeric: tabular-nums;
 }
 
-/* 分段明细 */
+/* 「数据存疑」角标：系统时间被改动过才会出现。
+   只提示、不改数——用户改时间多半是为了别的事，把一天的账推翻才是真错。 */
+.suspect {
+  margin-top: 8px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: rgba(255, 176, 32, .08);
+  border: 1px solid rgba(255, 176, 32, .26);
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--amber);
+  flex: none;
+}
+.suspect[hidden] { display: none; }
+
+/* 中间那块整体滚动：三段明细的长度不受控（加班段可能很多），
+   把「滚动」放在它们外面，页脚才会稳稳吸在底部。 */
+.mid {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  margin-right: -6px;
+  padding-right: 6px;
+}
+.mid::-webkit-scrollbar { width: 6px; }
+.mid::-webkit-scrollbar-thumb { background: rgba(128, 136, 146, .28); border-radius: 3px; }
+
+/* 分段明细。420 高比原来的 460 紧，这里每一档间距都收了一点：
+   三段明细要能在「有数据但不滚动」的情况下全露出来。 */
 .sec {
-  margin-top: 14px;
+  margin-top: 10px;
 }
 .sec-t {
   font-size: 10.5px;
@@ -145,17 +176,14 @@ html, body {
   background: var(--line);
 }
 .rows {
-  max-height: 120px;
-  overflow-y: auto;
+  /* 不再各自限高：滚动由外面那一层 .mid 统一负责 */
 }
-.rows::-webkit-scrollbar { width: 8px; }
-.rows::-webkit-scrollbar-thumb { background: rgba(128, 136, 146, .3); border-radius: 4px; }
 
 .row {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 4px;
+  padding: 5px 4px;
   font-size: 11px;
   font-family: var(--mono);
   font-variant-numeric: tabular-nums;
@@ -216,23 +244,27 @@ html, body {
       <span class="val" id="shadow">¥0.00</span>
     </div>
 
-    <div class="sec">
-      <div class="sec-t">已工作时长 <span id="worked" style="color:var(--fg);font-family:var(--mono)">—</span></div>
-    </div>
+    <div class="suspect" id="suspect" hidden>今天系统时间被改动过，工时与金额可能不准</div>
 
-    <div class="sec">
-      <div class="sec-t">午休加班段</div>
-      <div class="rows" id="lunchRows"></div>
-    </div>
+    <div class="mid">
+      <div class="sec">
+        <div class="sec-t">已工作时长 <span id="worked" style="color:var(--fg);font-family:var(--mono)">—</span></div>
+      </div>
 
-    <div class="sec">
-      <div class="sec-t">暂停段</div>
-      <div class="rows" id="pauseRows"></div>
-    </div>
+      <div class="sec">
+        <div class="sec-t">午休加班段</div>
+        <div class="rows" id="lunchRows"></div>
+      </div>
 
-    <div class="sec">
-      <div class="sec-t">今日额外进账</div>
-      <div class="rows" id="extraRows"></div>
+      <div class="sec">
+        <div class="sec-t">暂停段</div>
+        <div class="rows" id="pauseRows"></div>
+      </div>
+
+      <div class="sec">
+        <div class="sec-t">今日额外进账</div>
+        <div class="rows" id="extraRows"></div>
+      </div>
     </div>
 
     <div class="foot">
@@ -262,7 +294,8 @@ html, body {
     lunchRows: document.getElementById("lunchRows"),
     pauseRows: document.getElementById("pauseRows"),
     extraRows: document.getElementById("extraRows"),
-    extraTotal: document.getElementById("extraTotal")
+    extraTotal: document.getElementById("extraTotal"),
+    suspect: document.getElementById("suspect")
   };
 
   function paintTheme() {
@@ -320,6 +353,11 @@ html, body {
     el.perSec.textContent = d.per_sec;
     el.shadow.textContent = d.shadow;
     el.worked.textContent = d.worked;
+
+    /* 「数据存疑」角标：句子的前半句由前端补，后半句（原因）来自 Rust，
+       两边合起来才是完整的一句话。 */
+    el.suspect.hidden = !d.suspect;
+    if (d.suspect) el.suspect.textContent = d.suspect_note;
 
     el.lunchRows.innerHTML = "";
     if (d.lunch_spans && d.lunch_spans.length) {

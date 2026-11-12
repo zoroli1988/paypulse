@@ -10,7 +10,7 @@
      标了 todo 的行是这一版刻意没做的功能——它们照原型的位置摆着，但控件是灰的、
      右边写着「待接入」，并在说明里写清为什么。给一个点了没反应的开关，比不给更让人火大。 -->
 <div class="app">
-  <div class="bar" data-tauri-drag-region>
+  <div class="bar">
     <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
     <span class="bt">设置 · 牛马薪动了！</span>
     <button class="x" id="closeBtn" title="关闭（Esc）">✕</button>
@@ -555,6 +555,32 @@
           </div>
         </div>
 
+        <!-- 音效：和上面那条通知是**两个开关**。关掉通知卡、只留一声提示是有人想要的
+             （开会时屏幕上一块东西比响一下更显眼）。免打扰仍然会一起静音。 -->
+        <div class="blk">
+          <div class="blk-h">
+            <div class="blk-t">下班提示音</div>
+            <div class="blk-d">到点那一声。免打扰时段内自动静音。</div>
+          </div>
+          <div class="set-row" style="padding:8px 0">
+            <div class="l"><div class="t" style="font-size:12px">音色</div></div>
+            <div class="r">
+              <select class="sel" id="fSound" style="min-width:132px;height:27px;font-size:11px">
+                <option value="crisp">清脆（默认）</option>
+                <option value="soft">轻柔</option>
+                <option value="silent">静音</option>
+              </select>
+            </div>
+          </div>
+          <div class="set-row" style="padding:8px 0;border-bottom:0">
+            <div class="l"><div class="t" style="font-size:12px">音量</div></div>
+            <div class="r" style="width:168px;display:flex;align-items:center;gap:9px">
+              <input type="range" class="rng" id="fVol" min="0" max="100" step="5" style="flex:1" />
+              <span class="mono" id="volVal" style="font-size:11px;color:var(--text2);width:30px;text-align:right">40</span>
+            </div>
+          </div>
+        </div>
+
         <div class="blk">
           <div class="blk-h">
             <div class="blk-t">午休提醒</div>
@@ -655,6 +681,28 @@
             <div class="d">一个 JSON 文件，只落在本机磁盘，没有第二份</div>
           </div>
           <div class="r"><span class="pill" id="dataPath" style="font-family:var(--mono);font-size:10px">…</span></div>
+        </div>
+
+        <!-- 崩溃日志：规格 07 章那一行，默认关闭。
+             注意文案没有照抄原型里的「上报」——这个版本没有上报服务，
+             开关管的是「写不写本机这份 crash.log」。一句做不到的承诺
+             比不写更糟，尤其是写在隐私页上。 -->
+        <div class="set-row">
+          <div class="l">
+            <div class="t">崩溃日志</div>
+            <div class="d">
+              <b style="color:var(--amber,#FFB020)">默认关闭</b>。开启后把崩溃堆栈写到本机
+              <code style="font-family:var(--mono);font-size:10.5px">crash.log</code>，
+              只含堆栈、版本号与系统，<b>绝不含金额、薪资或路径</b>。本版没有上报服务，不会外发。
+            </div>
+          </div>
+          <div class="r"><div class="switch" id="swCrash"></div></div>
+        </div>
+        <div class="set-row" id="crashInfoRow" hidden style="padding-top:0">
+          <div class="l">
+            <div class="d" id="crashInfo" style="font-family:var(--mono);font-size:10.5px">…</div>
+          </div>
+          <div class="r"><button class="btn-g" id="crashClear" style="height:26px;font-size:11px;padding:0 11px">清空</button></div>
         </div>
 
         <div class="blk">
@@ -780,6 +828,7 @@
   </div>
 </div>
 
+<script src="drag.js"></script>
 <script src="settings.js"></script>
 </body>
 </html>

@@ -83,6 +83,10 @@ html, body {
   padding: 14px 16px 16px;
 }
 
+/* 两屏共用一扇窗：`hidden` 必须压过 `.body{display:flex}`，
+   否则两屏会同时排出来（flex 均分高度，谁都不对）。 */
+[hidden] { display: none !important; }
+
 .h { font-size: 15px; font-weight: 650; margin-bottom: 4px; flex: none; }
 .sub { font-size: 11.5px; color: #7E8792; line-height: 1.5; flex: none; }
 

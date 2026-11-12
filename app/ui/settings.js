@@ -34,7 +34,8 @@
     "swBoot", "swSilent", "snapRng", "snapVal", "mmChips", "swIdle", "fIdleMin",
     "idleVal", "idleNow", "segClose",
     "swEnd", "endChips", "swLunch", "lunchChips", "swSit", "segSit",
-    "swDnd", "dndFrom", "dndTo",
+    "swDnd", "dndFrom", "dndTo", "fSound", "fVol", "volVal",
+    "swCrash", "crashInfoRow", "crashInfo", "crashClear",
     "clrToday", "clrMonth", "clrAll", "clrBox", "clrWhat", "clrWord", "clrGo", "clrCancel",
     "updBody", "btnCheck", "updChan", "updSub"
   ].forEach(function (id) { el[id] = document.getElementById(id); });
@@ -196,6 +197,11 @@
     setSwitch(el.swDnd, v.notify.dnd);
     val("dndFrom", v.notify.dnd_from);
     val("dndTo", v.notify.dnd_to);
+    if (el.fSound) el.fSound.value = v.notify.sound;
+    if (el.fVol) el.fVol.value = String(v.notify.volume);
+    if (el.volVal) el.volVal.textContent = String(v.notify.volume);
+    setSwitch(el.swCrash, v.crash_log);
+    refreshCrash();
 
     /* ---- 等价物 / 请假 ---- */
     val("fEqPrice", v.eq_price_yuan.toFixed(2));
@@ -471,28 +477,11 @@
 
   /* ---- 拖动标题栏 ----
 
-     和悬浮窗同一个坑：`data-tauri-drag-region` 只在**事件目标自己**带这个属性时才生效，
-     而标题栏 .bar 里压着三个 mac 圆点、标题文字、关闭按钮——在文字或圆点上按住一拖，
-     目标就是那个 `<span>`/`<i>`，属性不在它身上，于是纹丝不动。
-     所以自己接一次：只在 .bar 区域内按下就 startDragging，关闭按钮除外。
-     属性还留着，不影响这条路径，去掉反而少一层兜底。 */
-  (function () {
-    var w = null;
-    var t = window.__TAURI__;
-    if (t && t.window) {
-      if (t.window.getCurrentWindow) w = t.window.getCurrentWindow();
-      else if (t.window.getCurrent) w = t.window.getCurrent();
-    }
-    var bar = document.querySelector(".bar");
-    if (bar && w) {
-      bar.addEventListener("mousedown", function (e) {
-        if (e.button !== 0) return;
-        if (e.target.closest("button")) return;   // 关闭按钮不放行
-        e.preventDefault();                        // 别把按下变成选文字
-        w.startDragging().catch(function () {});
-      });
-    }
-  })();
+     交给 drag.js（设置 / 询问 / 引导三扇窗共用）。
+     这里曾经自己接了一份 mousedown，而 .bar 上又留着 `data-tauri-drag-region`，
+     同一次按下会发起两次拖动，第二次把第一次掐断——用户看到的是
+     「按标题栏空白处拖不动、按标题文字反而能拖」。原因写在 drag.js 顶部。 */
+  if (window.bindBarDrag) window.bindBarDrag();
 
   /* ---- 绑定：薪资与口径 ---- */
 
@@ -727,6 +716,55 @@
     apply({ notify_dnd_to: el.dndTo.value });
   });
 
+  /* ---- 绑定：下班提示音 ---- */
+
+  /* 换音色立刻放一遍：这个控件的唯一意义是「听起来是哪种」，
+     不给听就等于让用户猜。 */
+  el.fSound.addEventListener("change", function () {
+    apply({ notify_sound: el.fSound.value });
+    preview(el.fSound.value, parseInt(el.fVol.value, 10));
+  });
+
+  /* 拖的时候只更新数字、不落盘：一次拖动会经过几十个值，
+     每个都写一次盘等于拿 SSD 换一个没人看的字段。松手（change）才存。 */
+  el.fVol.addEventListener("input", function () {
+    el.volVal.textContent = el.fVol.value;
+  });
+  el.fVol.addEventListener("change", function () {
+    var v = parseInt(el.fVol.value, 10);
+    apply({ notify_volume: v });
+    preview("crisp", v);
+  });
+
+  function preview(tone, volume) {
+    if (!invoke || !volume) return;
+    invoke("sound_preview", { tone: tone, volume: volume }).catch(function () {});
+  }
+
+  /* ---- 绑定：崩溃日志 ---- */
+
+  function refreshCrash() {
+    if (!invoke) return;
+    invoke("crash_status")
+      .then(function (s) {
+        /* 没有记录就整行不出现。隐私页上不该凭空多一行让人担心的东西。 */
+        el.crashInfoRow.hidden = !s;
+        if (s) el.crashInfo.textContent = "上次：" + s.at + " · " + s.place;
+      })
+      .catch(function () {});
+  }
+
+  el.swCrash.addEventListener("click", function () {
+    apply({ crash_log: !(view && view.crash_log) });
+  });
+
+  el.crashClear.addEventListener("click", function () {
+    if (!invoke) return;
+    invoke("crash_clear")
+      .then(refreshCrash)
+      .catch(function (e) { console.error("清空崩溃日志失败", e); });
+  });
+
   /* ---- 绑定：清除数据 ---- */
 
   var pendingClear = null;
@@ -858,7 +896,9 @@
      所以稳定版/测试版暂时都指向同一个 `latest/download/manifest.json`。
      等以后真的分通道（beta manifest 单独发），再把 beta 的 URL 换成
      对应的资产名。 */
-  var UPDATE_MANIFEST_URL = "https://github.com/zoroli1988/paypulse/releases/latest/download/manifest.json";
+  /* 清单地址不在这边了：拉清单是原生侧的事（`src-tauri/src/update.rs` 的
+     UPDATE_URL + `net.rs` 的 GET）。这里原先那个 fetch 的 URL 已经删掉，
+     因为它一头撞在 CORS 上，只会给出 `Failed to fetch` 这一句废话。 */
 
   function updShow(html) {
     if (el.updBody) el.updBody.innerHTML = html;
@@ -936,18 +976,16 @@
       var seq = [350, 700, 1050];
       seq.forEach(function (t, i) { setTimeout(function () { tickSteps(i + 1); }, t); });
 
-      // 通道目前只发一份 manifest（后端 release.yml 里 channel=stable），
-      // 稳定版/测试版走同一个地址；等 beta 分开发时再按通道拼 URL。
-      var url = UPDATE_MANIFEST_URL;
-
-      fetch(url, { cache: "no-store" })
-        .then(function (resp) {
-          if (!resp.ok) throw new Error("HTTP " + resp.status);
-          return resp.text();
-        })
-        .then(function (text) {
-          tickSteps(3); // 拉清单完成
-          return invoke("check_update", { manifestJson: text });
+      /* 拉清单这一步在 Rust 里做（见 addons: net.rs）。
+         为什么不在这一侧 fetch：清单挂在 GitHub Releases，
+         `github.com/.../download/...` 会 302 到 objects.githubusercontent.com，
+         那个域不带 CORS 头，WebView 的 fetch 在这一步直接抛 `Failed to fetch`——
+         连 HTTP 状态码都拿不到。原生 GET 没有同源策略，还能把
+         「连不上 / 404 / 验签失败」分开报。 */
+      invoke("check_update")
+        .then(function (r) {
+          tickSteps(3);
+          return r;
         })
         .then(function (r) {
           tickSteps(4); // 验签 + 比版本（Rust 侧一起做完）

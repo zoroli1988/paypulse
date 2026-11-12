@@ -697,6 +697,32 @@ impl Default for NotifyEnd {
     }
 }
 
+/// 下班提示音。规格 02 状态表：「弹『今日到账』通知 + 音效（可静音）」，
+/// 07 章那一栏是「清脆（默认）/ 轻柔 / 静音」三档加一个音量滑条。
+///
+/// ## 为什么是合成音，不是音频文件
+///
+/// 一个几百毫秒的 wav 打进安装包，等于给「一个记工资的小工具」多背一份
+/// 不认识来源的二进制资源。两个音只差频率、包络和长度，现场合成
+/// （见 `sound.rs`）既没有版权问题，也让「音量」变成一件简单的事——
+/// 直接按比例缩采样点，不必去动系统音量（那会影响别的程序）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SoundTone {
+    /// 清脆：两声上行，短促
+    Crisp,
+    /// 轻柔：单声、慢衰减
+    Soft,
+    /// 静音
+    Silent,
+}
+
+impl Default for SoundTone {
+    fn default() -> Self {
+        Self::Crisp
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct NotifyCfg {
@@ -714,6 +740,12 @@ pub struct NotifyCfg {
     pub dnd: bool,
     pub dnd_from_min: u32,
     pub dnd_to_min: u32,
+    /// 下班提示音的音色
+    #[serde(deserialize_with = "de_tone")]
+    pub sound: SoundTone,
+    /// 音量 0–100。0 等同于静音；但它和 `SoundTone::Silent` 不是一回事——
+    /// 音量拖到 0 是「先安静一会儿」，选静音是「别想再吵我」。
+    pub volume: u32,
 }
 
 impl Default for NotifyCfg {
@@ -727,6 +759,10 @@ impl Default for NotifyCfg {
             dnd: false,
             dnd_from_min: 12 * 60,
             dnd_to_min: 13 * 60,
+            sound: SoundTone::Crisp,
+            // 原型 2573 行那个滑条的默认值就是 40。定得低是有道理的：
+            // 这是每天响一次的提示，不是闹钟。
+            volume: 40,
         }
     }
 }
@@ -904,6 +940,42 @@ pub struct Settings {
     #[serde(default)]
     pub extras: Vec<ExtraEntry>,
 
+    /// 崩溃日志：**默认关**（规格 07 章那一行就是这么写的）。
+    ///
+    /// 关掉的时候程序崩了不留任何痕迹——这是对的，记工资的工具没有资格
+    /// 在用户机器上留一份「它怎么死的」的记录，除非用户自己点头。
+    ///
+    /// 本版没有上报服务，所以这个开关管的是「写不写本机那份 `crash.log`」。
+    /// 设置页照实这么写，不抄原型里那句「上报」——一句做不到的承诺
+    /// 比不写更糟。
+    #[serde(default)]
+    pub crash_log: bool,
+
+    /// 最近一次「程序还活着」的时刻（Unix 秒）。
+    ///
+    /// 它有两个用处，都跟「中间发生了什么」有关：
+    /// ① 启动时对比现在，算出「多久没开机」（规格 02-D 长时间未启动 → 补记确认）；
+    /// ② 没有正常退出（强杀、断电）时，它是最后一条线索。
+    ///
+    /// 每 60 秒落一次盘，不跟着 10Hz 的 tick 写。
+    #[serde(default)]
+    pub last_alive: Option<i64>,
+
+    /// 「这段没开机的时间算不算工」这条询问，答过的日期（`YYYY-MM-DD`）。
+    ///
+    /// 一天最多问一次。不记的话，用户上午答完「不算」，下午重启程序
+    /// 又会看到同一扇窗——那不是提醒，那是纠缠。
+    #[serde(default)]
+    pub fill_day: Option<String>,
+
+    /// 被标记为「数据存疑」的日期（`YYYY-MM-DD`）。
+    ///
+    /// 规格 02-D：手动改系统时间 → 记录单调时钟与墙钟的差值，偏差 > 5 分钟
+    /// 就标记该日「数据存疑」。只标当天，不改任何金额——用户改时间多半是
+    /// 为了别的事（测试、时区、系统抽风），把他一天的账推翻才是真错。
+    #[serde(default)]
+    pub suspect: Option<String>,
+
     /// 本版本不认识的字段，原样保留。
     ///
     /// 为什么留着：用户降级回旧版本时，新版本写的字段不该被吃掉——
@@ -961,6 +1033,10 @@ impl Default for Settings {
             monitor_primary: false,
             pauses: Vec::new(),
             extras: Vec::new(),
+            crash_log: false,
+            last_alive: None,
+            fill_day: None,
+            suspect: None,
             unknown: BTreeMap::new(),
         }
     }
@@ -1035,6 +1111,24 @@ impl Settings {
             Some(e) => e >= p.start,
             None => true,
         });
+
+        // 音量是乘法因子，超过 100 会削顶（数字听着像破音，像是程序坏了）。
+        self.notify.volume = self.notify.volume.min(100);
+        // 两个日期字段只做存在性校验：认不出来就当没记过。
+        // 留着 `2026-13-45` 会让「数据存疑」的角标永远点不亮（比错了日子）。
+        if self.suspect.as_deref().map_or(false, |d| !is_iso_date(d)) {
+            self.suspect = None;
+        }
+        if self.fill_day.as_deref().map_or(false, |d| !is_iso_date(d)) {
+            self.fill_day = None;
+        }
+        // 「上次还活着」在未来的时刻是不可信的（系统时间被回拨过）。
+        // 留着它会让「多久没开机」算成负数，于是补记的题永远不出现。
+        if let Some(t) = self.last_alive {
+            if t < 0 || t > 4_102_444_800 {
+                self.last_alive = None;
+            }
+        }
 
         // 额外进账：日期得是 `YYYY-MM-DD`，金额得是正的。
         //
@@ -1358,6 +1452,17 @@ fn de_notify_end<'de, D: serde::Deserializer<'de>>(d: D) -> Result<NotifyEnd, D:
         "amountwork" => NotifyEnd::AmountWork,
         "amounteq" => NotifyEnd::AmountEq,
         _ => NotifyEnd::Amount,
+    })
+}
+
+/// 提示音音色。认不出来的值退回 `Crisp`——不能让一个手改坏的字符串
+/// 把整份配置读不出来（那会连带把工资一起丢回默认值）。
+fn de_tone<'de, D: serde::Deserializer<'de>>(d: D) -> Result<SoundTone, D::Error> {
+    let raw = String::deserialize(d)?;
+    Ok(match raw.as_str() {
+        "soft" => SoundTone::Soft,
+        "silent" => SoundTone::Silent,
+        _ => SoundTone::Crisp,
     })
 }
 

@@ -26,7 +26,10 @@ use crate::AppState;
 pub const LABEL: &str = "detail";
 
 const DETAIL_W: f64 = 360.0;
-const DETAIL_H: f64 = 460.0;
+/// 规格 02-E 写的是 360×420。之前做成 460 是为了让内容「不滚动」，
+/// 但原型给的尺寸就是 420——它本来就是一扇「看一眼就走」的面板，
+/// 内容按 420 收，多出来的（多段加班）交给面板内部滚动。
+const DETAIL_H: f64 = 420.0;
 
 /// 一段午休加班。收口/未收口都算一条。
 #[derive(Serialize)]
@@ -96,6 +99,14 @@ pub struct DetailView {
     pub pause_spans: Vec<PauseSpanView>,
     /// 今日额外进账明细
     pub extras: Vec<ExtraView>,
+    /// 今天被标记成「数据存疑」。
+    ///
+    /// 规格 02-D：手动改系统时间 → 标记该日「数据存疑」，明细页角标提示。
+    /// 只提示、不改数：用户改时间多半是为了别的事（测试、对时、系统抽风），
+    /// 把他一天的账推翻才是真的错。
+    pub suspect: bool,
+    /// 角标上那句话。`suspect` 为假时是空串，前端不用再判一次。
+    pub suspect_note: String,
 }
 
 fn hm(ts: i64) -> String {
@@ -201,6 +212,9 @@ pub fn view(app: &AppHandle) -> DetailView {
         chrono::Weekday::Sun => "周日",
     };
 
+    // 「数据存疑」只认今天：这个标记是按天盖的，昨天的旧标记不该出现在今天这一页上。
+    let suspect = s.suspect.as_deref() == Some(today_iso.as_str());
+
     DetailView {
         today: format!("{} {}", today_iso, wd),
         amount_milli: snap.amount_milli,
@@ -219,6 +233,12 @@ pub fn view(app: &AppHandle) -> DetailView {
         lunch_spans,
         pause_spans,
         extras,
+        suspect,
+        suspect_note: if suspect {
+            "今天系统时间被改动过，工时与金额可能不准".to_string()
+        } else {
+            String::new()
+        },
     }
 }
 

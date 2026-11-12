@@ -435,5 +435,9 @@
   }
 
   window.addEventListener("resize", placeMini);
+
+  /* 标题栏拖动。同 ask.js / settings.js，实现在 drag.js。 */
+  if (window.bindBarDrag) window.bindBarDrag();
+
   boot();
 })();

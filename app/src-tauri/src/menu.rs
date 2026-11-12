@@ -21,9 +21,14 @@ use crate::AppState;
 
 pub const LABEL: &str = "hudmenu";
 
-const MENU_W: f64 = 208.0;
-/// 每项 36px，5 项 + 上下 padding 12×2 = 204。
-const MENU_H: f64 = 204.0;
+/// 原型 02-E 界面清单里这一项写的是 220×260，照此对齐。
+///
+/// 旧值 208×204 是按「5 项 × 36px + padding」手算的，算错了：内容区只有
+/// 204 − 7×2 − 1×2 = 188px，而五项 180 + 两条分隔线 14 + 六处 gap 12 = 206px，
+/// 溢出 18px，`overflow:hidden` 会把最后一项「退出」裁掉一截。现在按原型给够，
+/// 菜单项在 `menu.html` 里改成 `flex: 1` 均分高度——以后再改尺寸也不会裁。
+const MENU_W: f64 = 220.0;
+const MENU_H: f64 = 260.0;
 
 /// 菜单项的当前状态：暂停勾选、三档尺寸名。
 #[derive(serde::Serialize)]
