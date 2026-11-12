@@ -99,7 +99,11 @@ struct Rollout {
 /// 给前端的结果。`state` 决定设置页「关于」里那格显示什么。
 #[derive(Serialize)]
 pub struct UpdateResult {
-    /// `latest` / `available` / `error` / `signature-mismatch`
+    /// `latest` / `available` / `no-package` / `error` / `signature-mismatch`
+    ///
+    /// `no-package` 与 `signature-mismatch` 必须分开：前者是「这一版还没给
+    /// 你这个系统发包」，后者是「清单被人改过」。混在一起时 macOS 用户点一下
+    /// 检查更新，看到的是「检查失败」，性质像安全事件，实际只是没发包。
     pub state: String,
     /// 当前版本（本机）
     pub current: String,
@@ -115,7 +119,81 @@ pub struct UpdateResult {
     pub size: u64,
     /// 出错时的人类可读说明
     pub message: String,
+    /// 本机平台 `windows` / `macos` / `linux`。
+    /// 界面靠它挑安装说明——macOS 下的是 dmg，得自己拖进「应用程序」。
+    pub platform: String,
 }
+
+/// 验签这一关失败的原因。
+///
+/// 分开三种，因为它们的处置完全不同：
+/// - `NoPackage`：清单本身没问题、签名也没问题，只是没给这个平台发包 → 是信息；
+/// - `NoPubkey`：客户端还没配发版公钥（开发期）→ 是配置问题；
+/// - `Bad`：签名对不上 / 解析不了 → 才是需要当安全事件看的那种。
+///
+/// 2026-11-12 之前这三种都走 `Result<(), String>`，缺包也被标成
+/// `signature-mismatch`。macOS 用户在只有 windows-x64 的 manifest 上点
+/// 检查更新，界面上就是一句「检查失败」，看起来像文件被篡改。
+enum VerifyErr {
+    NoPackage { key: String },
+    NoPubkey,
+    Bad(String),
+}
+
+impl VerifyErr {
+    fn state(&self) -> &'static str {
+        match self {
+            VerifyErr::NoPackage { .. } => "no-package",
+            VerifyErr::NoPubkey => "error",
+            VerifyErr::Bad(_) => "signature-mismatch",
+        }
+    }
+
+    fn message(&self) -> String {
+        match self {
+            VerifyErr::NoPackage { key } => format!("这一版还没有提供 {key} 的安装包"),
+            VerifyErr::NoPubkey => "更新公钥未配置（占位公钥，尚未发版）".into(),
+            VerifyErr::Bad(m) => m.clone(),
+        }
+    }
+}
+
+/// 校验清单的 Ed25519 签名，顺便把本平台那个包装出来。
+///
+/// 签名覆盖 `version + platform + arch + sha256`（原型 05-E2 的约定：只签这四个
+/// 字段，其余字段即使被改也不影响安全）。
+///
+/// 返回 `&Package` 而不是 `()`：调用方本来就要取本平台的包，顺路带走可以少写
+/// 一次 `packages.get()`——之前那两处 `get()` 就是「缺包判成篡改」的来源。
+fn verify_manifest_signature<'a>(
+    manifest: &'a Manifest,
+    platform: &str,
+    arch: &str,
+) -> Result<&'a Package, VerifyErr> {
+    let Some(vk) = pubkey() else {
+        return Err(VerifyErr::NoPubkey);
+    };
+    let key = format!("{platform}-{arch}");
+    let Some(pkg) = manifest.packages.get(&key) else {
+        // 注意顺序：这里先判「有没有这个包」，再验签。缺包时没有 sha256
+        // 可签，验签根本无从谈起，所以这不是把安全检查往后挪。
+        return Err(VerifyErr::NoPackage { key });
+    };
+
+    // 签名的原文：version + platform + arch + sha256，用换行拼接
+    let signed = format!(
+        "{}\n{}\n{}\n{}",
+        manifest.latest, platform, arch, pkg.sha256
+    );
+    let sig_bytes = hex_decode(&pkg.sig).ok_or_else(|| VerifyErr::Bad("签名不是合法 hex".into()))?;
+    let sig = Signature::from_slice(&sig_bytes)
+        .map_err(|e| VerifyErr::Bad(format!("签名解析失败：{e}")))?;
+
+    vk.verify(signed.as_bytes(), &sig)
+        .map_err(|_| VerifyErr::Bad("签名校验失败：清单可能被篡改".to_string()))?;
+    Ok(pkg)
+}
+
 
 /// 语义化版本比较：`1.10.0 > 1.9.0`，不比字符串。
 ///
@@ -163,32 +241,6 @@ fn hex_decode(s: &str) -> Option<Vec<u8>> {
         .step_by(2)
         .map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
         .collect()
-}
-
-/// 校验清单的 Ed25519 签名。签名覆盖 `version + platform + arch + sha256`
-/// （原型 05-E2 的约定：只签这四个字段，其余字段即使被改也不影响安全）。
-fn verify_manifest_signature(
-    manifest: &Manifest,
-    platform: &str,
-    arch: &str,
-) -> Result<(), String> {
-    let Some(vk) = pubkey() else {
-        return Err("更新公钥未配置（占位公钥，尚未发版）".into());
-    };
-    let Some(pkg) = manifest.packages.get(&format!("{platform}-{arch}")) else {
-        return Err(format!("清单里没有 {platform}-{arch} 这个包"));
-    };
-
-    // 签名的原文：version + platform + arch + sha256，用换行拼接
-    let signed = format!(
-        "{}\n{}\n{}\n{}",
-        manifest.latest, platform, arch, pkg.sha256
-    );
-    let sig_bytes = hex_decode(&pkg.sig).ok_or("签名不是合法 hex")?;
-    let sig = Signature::from_slice(&sig_bytes).map_err(|e| format!("签名解析失败：{e}"))?;
-
-    vk.verify(signed.as_bytes(), &sig)
-        .map_err(|_| "签名校验失败：清单可能被篡改".to_string())
 }
 
 /// 计算一段字节的 sha256（hex，小写）。
@@ -245,6 +297,7 @@ fn failed(msg: &str) -> UpdateResult {
         url: String::new(),
         size: 0,
         message: msg.to_string(),
+        platform: std::env::consts::OS.to_string(),
     }
 }
 
@@ -263,6 +316,7 @@ fn evaluate(manifest_json: &str) -> UpdateResult {
         url: String::new(),
         size: 0,
         message: String::new(),
+        platform: platform.to_string(),
     };
 
     let manifest: Manifest = match serde_json::from_str(manifest_json) {
@@ -286,19 +340,12 @@ fn evaluate(manifest_json: &str) -> UpdateResult {
         other => other,
     };
 
-    // 1. 验签
-    if let Err(e) = verify_manifest_signature(&manifest, plat_key, arch_key) {
-        r.message = e;
-        r.state = "signature-mismatch".into();
-        return r;
-    }
-
-    // 2. 取本平台包
-    let key = format!("{plat_key}-{arch_key}");
-    let pkg = match manifest.packages.get(&key) {
-        Some(p) => p,
-        None => {
-            r.message = format!("清单里没有 {key} 这个包");
+    // 1. 验签，顺路把本平台的包取出来（缺包会走到 no-package，不是篡改）
+    let pkg = match verify_manifest_signature(&manifest, plat_key, arch_key) {
+        Ok(p) => p,
+        Err(e) => {
+            r.message = e.message();
+            r.state = e.state().into();
             return r;
         }
     };
@@ -387,5 +434,47 @@ mod tests {
         assert!(r.message.contains("连不上"));
         // 版本号仍然要带着，界面「当前版本」那行不能空
         assert_eq!(r.current, env!("CARGO_PKG_VERSION"));
+    }
+
+    /// 缺本平台的包 ≠ 清单被篡改。
+    ///
+    /// 2026-11-12 之前这两件事都落在 `signature-mismatch` 上：manifest 里只有
+    /// windows-x64 时，macOS 用户点检查更新会看到「检查失败」，读起来像文件被改过。
+    #[test]
+    fn missing_package_is_not_a_tamper_alarm() {
+        let m: Manifest = serde_json::from_str(
+            r#"{"channel":"stable","latest":"0.1.4","released_at":"2026-11-12T04:01:07Z",
+                "packages":{"windows-x64":{"url":"u","size":1,"sha256":"aa","sig":"bb"}}}"#,
+        )
+        .expect("清单应该能解析");
+
+        let e = verify_manifest_signature(&m, "darwin", "arm64")
+            .err()
+            .expect("没有 darwin-arm64 就该报错");
+        assert_eq!(e.state(), "no-package", "缺包不能报成签名问题");
+        assert!(
+            e.message().contains("darwin-arm64"),
+            "报错要说清缺的是哪个包：{}",
+            e.message()
+        );
+
+        // 包在、但签名是假的 —— 这个才该按篡改报
+        let e2 = verify_manifest_signature(&m, "windows", "x64")
+            .err()
+            .expect("签名是假的");
+        assert_eq!(e2.state(), "signature-mismatch");
+    }
+
+    /// 直接走一遍 `evaluate`，确认状态真的传到了前端那一层。
+    /// 用空 packages 构造，这样在任何平台上跑都稳定是「缺包」。
+    #[test]
+    fn evaluate_reports_missing_package_as_its_own_state() {
+        let r = evaluate(
+            r#"{"channel":"stable","latest":"9.9.9","released_at":"x","packages":{}}"#,
+        );
+        assert_eq!(r.state, "no-package");
+        // 界面上「当前版本」那行不能空，平台也要带给前端（mac 要提示怎么装 dmg）
+        assert_eq!(r.current, env!("CARGO_PKG_VERSION"));
+        assert!(!r.platform.is_empty());
     }
 }

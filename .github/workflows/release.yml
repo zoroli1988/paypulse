@@ -89,17 +89,19 @@ jobs:
       - name: 上传安装包到 Releases
         uses: softprops/action-gh-release@v2
         with:
+          # 只传 dmg。`bundle/macos/*.app.tar.gz` 只有开了
+          # `bundle.createUpdaterArtifacts` 才会生成——本工程的更新是
+          # 「下载安装包、用户自己装」，不做原地替换，所以那个 glob 一直是空匹配
+          # （v0.1.4 的 Release 里就没有它）。
           files: |
             app/src-tauri/target/release/bundle/dmg/*.dmg
-            app/src-tauri/target/release/bundle/macos/*.app.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # ------------------------------------------------------------------
   # 生成 manifest.json（签名）+ 发布
   # 依赖 Windows/macOS 编译完成，拿到 sha256 后签名。
-  # 这一版先做「Windows-only」的 manifest（mac 版尚未真机验证），
-  # 等 mac 版稳定后再把 darwin 包并进来。
+  # 两个平台各一个包项：Windows 是 NSIS 安装器，macOS 是 dmg。
   # ------------------------------------------------------------------
   manifest:
     name: 生成 manifest 并发布
@@ -113,49 +115,90 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - name: 下载刚发布的安装包
-        uses: robinraju/release-downloader@v1.9
-        with:
-          # 精确下载当前 tag，不能用 latest：latest 可能还指向上一个 tag（v0.1.0），
-          # 会拿到旧版的 exe 导致 manifest 指向错误的安装包。
-          tag: ${{ github.ref_name }}
-          fileName: "*.exe"
-          tarBall: false
-          zipBall: false
+        # 用 gh 而不是第三方 downloader：`--pattern` 能重复给，一次拉两种包，
+        # 也不用猜多个 glob 在某个 action 里的匹配语义。
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/pkg"
+          # 精确取当前 tag，不能用 latest：latest 可能还指向上一个 tag，
+          # 会拿到旧包，导致 manifest 指向错误的安装包。
+          gh release download "$GITHUB_REF_NAME" \
+            --pattern '*.exe' --pattern '*.dmg' \
+            --dir "$GITHUB_WORKSPACE/pkg"
+          ls -la "$GITHUB_WORKSPACE/pkg"
 
       - name: 生成 manifest.json
         run: |
+          set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
-          # 精确取当前版本号的 exe（release 里可能混入旧 tag 的产物），
-          # 用文件名里带 "_${VERSION}_" 来锁定，避免拿到旧版。
-          EXE=$(ls "$GITHUB_WORKSPACE"/*_${VERSION}_*setup.exe 2>/dev/null | head -1)
+          PKG_DIR="$GITHUB_WORKSPACE/pkg"
+
+          # 每个平台一个 key，**架构从文件名里认**。
+          # 写死 arm64 的话，哪天 macos-latest 换成 Intel 镜像，就会给出一个
+          # 装不上的包——而且签名是对的、客户端验得过，用户下载完才发现装不了。
+          PKG_ARGS=()
+          PKG_NAMES=()
+          add_pkg() { # $1=key  $2=文件
+            PKG_ARGS+=(--pkg "$1" "$2")
+            PKG_NAMES+=("$1=$(basename "$2")")
+            echo "  + $1  $(basename "$2")"
+          }
+
+          # Windows：优先 NSIS 的 setup.exe（MSI 要管理员权限，也不适合就地升级）
+          EXE=$(ls "$PKG_DIR"/*_"$VERSION"_*setup.exe 2>/dev/null | head -1 || true)
           if [ -z "$EXE" ]; then
-            EXE=$(ls "$GITHUB_WORKSPACE"/*_${VERSION}_*.exe 2>/dev/null | head -1)
+            EXE=$(ls "$PKG_DIR"/*_"$VERSION"_*.exe 2>/dev/null | head -1 || true)
           fi
           if [ -z "$EXE" ]; then
-            echo "找不到 ${VERSION} 的 exe，当前目录内容："; ls -la "$GITHUB_WORKSPACE"
+            echo "找不到 ${VERSION} 的 exe，目录内容："
+            ls -la "$PKG_DIR"
             exit 1
           fi
-          echo "使用安装包：$EXE"
+          add_pkg windows-x64 "$EXE"
+
+          # macOS：出的是 dmg。dmg 不能就地替换（要挂载再拖），所以 mac 上的
+          # 「安装」和 Windows 一样是用户自己跑一次安装包——两边语义一致。
+          DMG=$(ls "$PKG_DIR"/*_"$VERSION"_*.dmg 2>/dev/null | head -1 || true)
+          if [ -n "$DMG" ]; then
+            case "$(basename "$DMG")" in
+              *_aarch64.dmg | *_arm64.dmg) add_pkg darwin-arm64 "$DMG" ;;
+              *_x64.dmg | *_x86_64.dmg)    add_pkg darwin-x64   "$DMG" ;;
+              *)
+                echo "::warning::dmg 文件名里认不出架构，先不写进 manifest：$(basename "$DMG")"
+                ;;
+            esac
+          else
+            echo "::warning::没找到 dmg，这次 manifest 不含 macOS 包（mac 用户会看到「这一版还没有提供 darwin-arm64 的安装包」）"
+          fi
+
           cd app/tools/make-manifest
           cargo run --release -- \
             --version "$VERSION" \
             --channel stable \
             --priv "$UPDATE_SIGNING_KEY" \
-            --pkg windows-x64 "$EXE" \
+            "${PKG_ARGS[@]}" \
             --out manifest.json
-          # make-manifest 把 url 写成本地路径，这里替换成真实 Release 下载地址
-          python3 - "$VERSION" "$EXE" <<'PY'
-          import json, sys, os
+
+          # make-manifest 把 url 写成传进去的本地路径，这里换成真实下载地址。
+          # 每个包指向自己的文件——之前是所有包都指向 exe，加上第二个包之后
+          # 那样写会让 mac 用户下到一个 exe 安装器。
+          python3 - "$VERSION" "${PKG_NAMES[@]}" <<'PY'
+          import json, os, sys
+
           ver = sys.argv[1]
-          exe = os.path.basename(sys.argv[2])
+          names = dict(a.split("=", 1) for a in sys.argv[2:])
           with open("manifest.json", encoding="utf-8") as f:
               m = json.load(f)
           base = f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/releases/download/v{ver}"
-          for pkg in m.get("packages", {}).values():
-              pkg["url"] = f"{base}/{exe}"
+          for key, pkg in m["packages"].items():
+              if key not in names:
+                  raise SystemExit(f"manifest 里有 {key}，但没给它配文件名")
+              pkg["url"] = f"{base}/{names[key]}"
+              print("  " + key + " -> " + pkg["url"])
           with open("manifest.json", "w", encoding="utf-8") as f:
               json.dump(m, f, ensure_ascii=False, indent=2)
-          print("manifest url 已替换为:", base + "/" + exe)
           PY
           echo "manifest 已生成"
 

@@ -926,6 +926,18 @@
     );
   }
 
+  /* 「这一版还没给这个系统发包」跟「检查失败」不是一回事：
+     前者清单本身是好的、签名也是对的，只是维护者没给这个平台出包。
+     以前它被归到 signature-mismatch 上，用户看到的是一句红色的「检查失败」，
+     读起来像文件被改过。用中性色单独一格。 */
+  function updNoPackage(msg) {
+    updShow(
+      '<div class="upd-idle"><span class="dot" style="background:#E8B341"></span>' +
+      '<b>暂无适配包</b> ' + esc(msg) +
+      '<span style="margin-left:auto;font-size:10px;color:#5F6874">上次检查 刚才</span></div>'
+    );
+  }
+
   function updChecking() {
     updShow(
       '<div style="display:flex;align-items:center;gap:9px;font-size:11px;color:#B4BAC2;margin-bottom:9px">' +
@@ -945,6 +957,13 @@
 
   function updAvailable(r) {
     var mb = (r.size / 1024 / 1024).toFixed(1);
+    /* macOS 下的是一个 dmg：它不能就地替换（要挂载、再把 App 拖进「应用程序」），
+       跟 Windows 双击安装器是两种动作。不写这一句，用户会在 Downloads 里
+       双击 dmg、看到一个窗口、然后不知道接下来干什么。 */
+    var hint = r.platform === "darwin"
+      ? '<div style="margin-top:8px;font-size:10px;color:#7A838E;line-height:1.5">' +
+        '下完打开 dmg，把「牛马薪动了！」拖进「应用程序」替换旧版即可。</div>'
+      : "";
     updShow(
       '<div class="upd-idle" style="background:rgba(53,224,127,.09);border-color:rgba(53,224,127,.32)">' +
       '<span class="dot" style="background:#35E07F"></span><b>' + esc(r.latest) + '</b> 有新版本可用' +
@@ -956,7 +975,7 @@
       '<div style="display:flex;gap:8px;margin-top:10px">' +
       '<button class="btn btn-p" id="btnDl" style="height:28px;font-size:11px;padding:0 14px">下载新版本</button>' +
       (r.forced ? "" : '<button class="btn btn-g" id="btnLater" style="height:28px;font-size:11px;padding:0 14px">稍后提醒</button>') +
-      '</div>'
+      '</div>' + hint
     );
     var dl = document.getElementById("btnDl");
     if (dl) dl.addEventListener("click", function () {
@@ -994,6 +1013,7 @@
             btn.disabled = false;
             if (r.state === "latest") updIdle(r.message);
             else if (r.state === "available") updAvailable(r);
+            else if (r.state === "no-package") updNoPackage(r.message);
             else updError(r.message || "未知错误");
             if (el.updSub) el.updSub.textContent = "刚刚检查 · 通道 " + (el.updChan ? el.updChan.value : "稳定版");
           }, 350);

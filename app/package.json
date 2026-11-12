@@ -1,7 +1,7 @@
 {
   "name": "paypulse",
   "private": true,
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "牛马薪动了！ · 桌面实时薪资悬浮窗",
   "scripts": {
     "dev": "tauri dev",
