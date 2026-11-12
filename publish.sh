@@ -87,6 +87,23 @@ git_net() {
   fi
 }
 
+# 带 token 的 git 调用。
+# token 只经**环境变量**交给一个一次性的 credential helper：不落盘、不进 argv
+# （`ps` / 进程列表里看不到），进程结束即消失。
+#
+# 之前的做法是 mktemp 写一个 askpass 脚本再 rm。2026-11-12 发 v0.1.4 时那个 `rm`
+# 被环境的删除保护拦住（SAFE_DELETE_INVALID_PATH），含 token 的文件就留在临时目录里了。
+# 「用完即删」这种约定不该靠运气——改成根本不需要删。
+# `credential.helper=` 先清空，避免 GCM 在后台弹窗或读旧凭据。
+GIT_AUTH_CONFIG=(
+  -c credential.helper=
+  -c 'credential.helper=!f() { printf "%s\n" "username=x-access-token" "password=$PAYPULSE_GH_TOKEN"; }; f'
+)
+
+git_auth() {
+  PAYPULSE_GH_TOKEN="$TOKEN" git_net "${GIT_AUTH_CONFIG[@]}" "$@"
+}
+
 # 判断是不是一个 git 工作副本。
 # ⚠️ 用 -e 不用 -d：子模块和 `git worktree` 的 .git 是个**文本文件**
 #    （内容形如 `gitdir: ../.git/modules/paypulse-core`），目录检查判不出来。
@@ -197,7 +214,7 @@ scrub_config_urls() {
 # token 不落盘：remote URL 保持干净 HTTPS，push 时用临时 askpass 注入 token。
 # 这样 .git/config 里永远不会出现明文 token（即使 token 泄露被撤销，本地也无残留）。
 push_repo() {
-  local dir="$1" repo="$2" clean_url token_helper
+  local dir="$1" repo="$2" clean_url
   clean_url="https://github.com/$OWNER/$repo.git"
 
   # 先把 submodule.*.url 之类的历史遗留凭据洗掉（只清 remote.origin.url 是不够的）
@@ -215,12 +232,6 @@ push_repo() {
     fi
   fi
 
-  # 用一次性 askpass 脚本把 token 传给 git，用完即删，不写进 config
-  token_helper="$(mktemp)"
-  printf '#!/bin/sh\necho "%s"\n' "$TOKEN" > "$token_helper"
-  chmod +x "$token_helper"
-  export GIT_ASKPASS="$token_helper"
-
   # 确保本地分支名与远端一致
   local br
   br="$(git rev-parse --abbrev-ref HEAD)"
@@ -229,18 +240,13 @@ push_repo() {
   fi
 
   info "$repo: 推送到 origin $br ..."
-  if ! git_net push -u origin "$br"; then
-    rm -f "$token_helper"
+  if ! git_auth push -u origin "$br"; then
     if [[ -z "$GIT_PROXY" ]]; then
       die "$repo: 推送失败。若报 'schannel: failed to receive handshake'，\n  说明直连 github.com 被拦，请指定代理：\n  GIT_PROXY=http://127.0.0.1:7890 bash publish.sh push"
     fi
     die "$repo: 推送失败（当前代理：$GIT_PROXY）。检查代理是否可用，或用 GIT_PROXY= 强制直连。"
   fi
   ok "$repo: 推送完成"
-
-  # 清理一次性 askpass（token 不留盘）
-  rm -f "$token_helper"
-  unset GIT_ASKPASS
 }
 
 # ---- GitHub API 封装（续）：公共密钥 / secrets ----
@@ -380,17 +386,12 @@ cmd_release() {
     git tag "$tag"
     ok "本地已打 tag $tag"
   fi
-  # 用一次性 askpass 注入 token（remote 是干净 URL，不落盘）
-  local token_helper
-  token_helper="$(mktemp)"
-  printf '#!/bin/sh\necho "%s"\n' "$TOKEN" > "$token_helper"
-  chmod +x "$token_helper"
-  GIT_ASKPASS="$token_helper" git_net push origin "$tag" 2>&1 || {
+  # token 经环境变量走一次性 credential helper（不落盘、不进 argv）
+  git_auth push origin "$tag" 2>&1 || {
     warn "git push tag 走 schannel 可能偶发失败（TLS 不稳）。"
     warn "改用 GitHub API 打 tag（Git Data API 稳定）："
     create_tag_via_api "$tag"
   }
-  rm -f "$token_helper"
 
   echo
   ok "已触发发版。等待 Actions 完成后校验："
