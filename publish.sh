@@ -6,8 +6,10 @@
 #
 #   bash publish.sh                    # 建仓 + 推送（首次/改代码后）
 #   bash publish.sh setup-secrets      # 把 PAT + 签名私钥配进 paypulse 仓的 Secrets
-#   bash publish.sh gen-key            # 生成正式发版用的 Ed25519 密钥对
+#   bash publish.sh gen-key            # 生成 Ed25519 密钥对（私钥写文件，不打印）
+#   bash publish.sh check-key <文件>   # 核对私钥与 update.rs 里的公钥是否配对
 #   bash publish.sh release v0.1.2     # 打 tag 触发 Actions 发版，并校验 manifest
+#   bash publish.sh scan-secrets        # 扫仓库与 .git/config 里的明文凭据（推送前自动跑）
 #   bash publish.sh revoke-help        # 打印旧 PAT / 泄露私钥的 revoke 指引
 #
 # 建仓 + 推送（默认动作）：
@@ -65,7 +67,7 @@ command -v git  >/dev/null 2>&1 || die "未找到 git，请先安装。"
 # revoke-help / gen-key 不需要 token；其余子命令及默认 push 都需要。
 CMD_PRE="${1:-push}"
 case "$CMD_PRE" in
-  revoke-help|gen-key) ;;
+  revoke-help|gen-key|check-key|scan-secrets) ;;
   *)
     if [[ -z "$TOKEN" ]]; then
       die "缺少 GITHUB_TOKEN 环境变量。\n  请先执行：export GITHUB_TOKEN=\"ghp_xxxx...\"\n  （PAT 生成入口：https://github.com/settings/tokens）"
@@ -94,12 +96,83 @@ create_repo() {
   esac
 }
 
+# ---- 凭据扫描 ----
+# 2026-11-12 加的闸门。起因：`.git/config` 里有一条
+#   [submodule "paypulse-core"] url = https://x-access-token:<凭据>@github.com/...   # secret-scan:allow
+# 是手动加的，publish.sh 里那段「已有 remote 就清回干净 URL」只处理了
+# `remote.origin.url`，没管 `submodule.*.url`，于是 token 就这么在磁盘上躺了很久。
+# 结论：靠自觉不行，得让脚本在推送前自己查一遍。
+SECRET_RE='ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|x-access-token:[^@]+@|-----BEGIN [A-Z ]*PRIVATE KEY-----'  # secret-scan:allow
+
+# 把输出里的凭据本身打码，只留前 8 个字符，方便定位但不二次泄露。
+mask_secret() {
+  sed -E 's/(ghp_[A-Za-z0-9]{4})[A-Za-z0-9]+/\1…(隐去)/g; s/(github_pat_[A-Za-z0-9]{4})[A-Za-z0-9_]+/\1…(隐去)/g; s/(x-access-token:)[^@]+/\1…(隐去)/g'  # secret-scan:allow
+}
+
+scan_secrets() {
+  local dir="$1" label="$2" hits=0
+  cd "$dir" || return 0
+
+  info "扫描 $label 的明文凭据 ..."
+
+  # 1) 所有被 git 跟踪的文件
+  local tracked
+  tracked="$(git ls-files 2>/dev/null | grep -v '^$' || true)"
+  if [[ -n "$tracked" ]]; then
+    local found
+    found="$(printf '%s\n' "$tracked" | while read -r f; do
+        [[ -f "$f" ]] || continue
+        # 带 `secret-scan:allow` 标记的行放行：本脚本自己的规则定义与示例就在这类行上
+        grep -nIE "$SECRET_RE" "$f" 2>/dev/null | grep -v 'secret-scan:allow' | sed "s|^|$f:|"
+      done | head -20)"
+    if [[ -n "$found" ]]; then
+      warn "$label 的跟踪文件里有凭据："
+      printf '%s\n' "$found" | mask_secret
+      hits=$((hits + $(printf '%s\n' "$found" | wc -l)))
+    fi
+  fi
+
+  # 2) 本地配置（含 submodule.*.url —— 上一枚 token 就是藏在这里）
+  local cfgline
+  cfgline="$(git config --local --list 2>/dev/null | grep -E "$SECRET_RE" || true)"
+  if [[ -n "$cfgline" ]]; then
+    warn "$label 的 .git/config 里有凭据："
+    printf '%s\n' "$cfgline" | mask_secret
+    hits=$((hits + $(printf '%s\n' "$cfgline" | wc -l)))
+  fi
+
+  if [[ "$hits" -eq 0 ]]; then
+    ok "$label 干净"
+  fi
+  return "$hits"
+}
+
+# 把所有带凭据的 url.* / submodule.*.url 就地洗回干净地址。
+scrub_config_urls() {
+  local dir="$1" key val clean n=0
+  cd "$dir" || return 0
+  while IFS= read -r key; do
+    [[ -n "$key" ]] || continue
+    val="$(git config --local --get "$key")"
+    if printf '%s' "$val" | grep -qE "$SECRET_RE"; then
+      clean="$(printf '%s' "$val" | sed -E 's#^(https://)[^@/]+@#\1#')"
+      git config --local "$key" "$clean"
+      warn "$dir: 已清理 $key 里的明文凭据 → $clean"
+      n=$((n + 1))
+    fi
+  done < <(git config --local --name-only --get-regexp '^(remote|submodule)\..*\.url$' 2>/dev/null || true)
+  [[ "$n" -eq 0 ]] || ok "$dir: 共清理 $n 条"
+}
+
 # ---- 推送单个仓库 ----
 # token 不落盘：remote URL 保持干净 HTTPS，push 时用临时 askpass 注入 token。
 # 这样 .git/config 里永远不会出现明文 token（即使 token 泄露被撤销，本地也无残留）。
 push_repo() {
   local dir="$1" repo="$2" clean_url token_helper
   clean_url="https://github.com/$OWNER/$repo.git"
+
+  # 先把 submodule.*.url 之类的历史遗留凭据洗掉（只清 remote.origin.url 是不够的）
+  scrub_config_urls "$dir"
 
   cd "$dir"
   if ! git remote get-url origin >/dev/null 2>&1; then
@@ -218,12 +291,42 @@ cmd_setup_secrets() {
 cmd_gen_key() {
   local gk_dir="$PUBLIC_DIR/app/tools/gen-key"
   [[ -d "$gk_dir" ]] || die "找不到 gen-key：$gk_dir"
+  local out="${1:-$HOME/.paypulse-signing-key-$(date +%Y%m%d).txt}"
   info "生成正式发版用的 Ed25519 密钥对 ..."
-  ( cd "$gk_dir" && cargo run --release )
+  info "私钥写到：$out（终端只显示公钥与指纹）"
+  ( cd "$gk_dir" && cargo run --release -- --out "$out" )
   echo
-  warn "请把上面的私钥 hex 离线保管（密码管理器 / 纸面），绝不进仓库或 CI。"
-  warn "然后把公钥 hex 填进 app/src-tauri/src/update.rs 的 UPDATE_PUBKEY_HEX，"
-  warn "再 export UPDATE_SIGNING_KEY='<私钥hex>' 并跑 'bash publish.sh setup-secrets'。"
+  warn "私钥**不会**打印在终端里——上一版会，结果就是它泄露的那条路径。"
+  warn "接下来："
+  warn "  1) 把 $out 导入密码管理器，然后删掉它"
+  warn "  2) 新公钥已经要填进 app/src-tauri/src/update.rs 的 UPDATE_PUBKEY_HEX（记得改）"
+  warn "  3) 核对配对：gen-update-key --check $out"
+  warn "  4) export UPDATE_SIGNING_KEY=\"\$(grep -v '^#' '$out' | tr -d '\\\\n')\""
+  warn "  5) bash publish.sh setup-secrets"
+  warn "  换公钥之后旧客户端收不到更新，必须发一版带新公钥的版本，见 revoke-help。"
+}
+
+# ---- 子命令：check-key ----
+# 核对「私钥文件 ↔ update.rs 里的公钥」是否配对。
+cmd_check_key() {
+  local gk_dir="$PUBLIC_DIR/app/tools/gen-key"
+  local key="${1:-}"
+  [[ -n "$key" ]] || die "用法：bash publish.sh check-key <私钥文件>"
+  ( cd "$gk_dir" && cargo run --release -- --check "$key" )
+}
+
+# ---- 子命令：scan-secrets ----
+cmd_scan_secrets() {
+  local bad=0
+  scan_secrets "$PUBLIC_DIR" "公开仓" || bad=$((bad + $?))
+  if [[ -d "$PRIVATE_DIR/.git" ]]; then
+    scan_secrets "$PRIVATE_DIR" "私有仓" || bad=$((bad + $?))
+  fi
+  echo
+  if [[ "$bad" -gt 0 ]]; then
+    die "发现 $bad 处明文凭据。先跑 'bash publish.sh revoke-help' 按提示轮换，再清掉本地残留。"
+  fi
+  ok "没发现明文凭据"
 }
 
 # ---- 子命令：release ----
@@ -335,18 +438,26 @@ cmd_revoke_help() {
 若某个 PAT 或签名私钥 hex 曾在聊天/日志/仓库里出现过，必须立即作废并轮换：
 
 1) 撤销旧 PAT（Personal Access Token）
+   GitHub **没有**删除 token 的 API，只能在网页上手动作废：
    - 经典 PAT： https://github.com/settings/tokens
-     找到对应 token → 点其右侧 "..." → "Revoke"（或直接 Delete）。
-   - 细粒度 PAT： https://github.com/settings/tokens?type=beta
-     找到对应 token → "Revoke"。
-   撤销后，任何用旧 PAT 的脚本/CI 会立即失效，需换新 PAT 并 export GITHUB_TOKEN。
+     找到对应 token → 右侧 "..." → "Revoke"（或 Delete）。
+   - 细粒度 PAT： https://github.com/settings/tokens?type=beta → 对应 token → "Revoke"。
+   撤销后，任何用旧 PAT 的脚本/CI 会立即失效。
+   然后换新 PAT，并**先把新 token 存进密码管理器**再 export：
+     read -rs GITHUB_TOKEN && export GITHUB_TOKEN     # 输入不回显、不进 shell history
+     bash publish.sh setup-secrets
+   注意：`export GITHUB_TOKEN='...'` 这种写法会把 token 留在 shell history 里，
+   上一枚 PAT 就是这么暴露的。
 
 2) 轮换签名私钥（UPDATE_SIGNING_KEY）
-   - 重新生成： bash publish.sh gen-key
+   - 重新生成： bash publish.sh gen-key       # 私钥写文件，不打印到终端
+   - 核对配对： bash publish.sh check-key ~/.paypulse-signing-key-<日期>.txt
    - 把新公钥 hex 写进 app/src-tauri/src/update.rs 的 UPDATE_PUBKEY_HEX，提交并随新版发版。
-   - 用新私钥重跑： export UPDATE_SIGNING_KEY='<新私钥hex>' && bash publish.sh setup-secrets
-   - 注意：已发出的旧版客户端只认旧公钥；轮换后旧版会拒绝新 manifest，
-     所以要么立刻发新版本覆盖，要么在 manifest 里保留对旧公钥的兼容（本工程当前为单公钥，直接换发新版）。
+   - 用新私钥重跑： read -rs UPDATE_SIGNING_KEY && export UPDATE_SIGNING_KEY
+                   bash publish.sh setup-secrets
+   - ⚠️ 已发出的旧版客户端只认旧公钥，**连强制更新都收不到**（验签在版本比较之前）。
+     只能让用户手动装一次带新公钥的版本，详见 RELEASING.md 第五节。
+   - 本工程已于 2026-11-12 轮换过一次（旧指纹 bea83f4e… → 新指纹 28d4990de6aef54a）。
 
 3) 检查是否泄漏进了仓库/历史
    - 本地历史里搜 token/私钥： git log -p --all | grep -n '<token前几位>'
@@ -361,13 +472,18 @@ EOF
 CMD="${1:-push}"
 case "$CMD" in
   setup-secrets)     cmd_setup_secrets; exit 0;;
-  gen-key)           cmd_gen_key; exit 0;;
+  gen-key)           cmd_gen_key "${2:-}"; exit 0;;
+  check-key)         cmd_check_key "${2:-}"; exit 0;;
+  scan-secrets)      cmd_scan_secrets; exit 0;;
   release)           cmd_release "${2:-}"; exit 0;;
   verify-release)    cmd_verify_release "${2:-}"; exit 0;;
   revoke-help)       cmd_revoke_help; exit 0;;
   push)              ;;   # 继续下面的主流程
-  *) die "未知子命令：$CMD（可选：push / setup-secrets / gen-key / release / verify-release / revoke-help）";;
+  *) die "未知子命令：$CMD（可选：push / setup-secrets / gen-key / check-key / scan-secrets / release / verify-release / revoke-help）";;
 esac
+
+# 推送前先自查：上一枚 token 就在 .git/config 里躺了很久没人发现
+cmd_scan_secrets
 
 info "开始一键建仓 + 推送（owner=$OWNER）"
 

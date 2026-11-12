@@ -133,6 +133,7 @@ dependencies = [
  "ed25519-dalek",
  "hex",
  "rand",
+ "sha2",
 ]
 
 [[package]]

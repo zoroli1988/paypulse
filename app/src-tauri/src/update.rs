@@ -38,9 +38,20 @@ use serde::{Deserialize, Serialize};
 /// 公钥对应的私钥在发版机上离线保管，用 `app/tools/gen-key` 生成。
 /// 发版流程见 `.github/workflows/release.yml`。
 ///
-/// ⚠️ 换公钥 = 老客户端再也验不过新清单。只在私钥泄露、必须轮换时改这里，
-/// 改完要发一个「带新公钥」的强制更新版本，否则所有旧版本都收不到后续更新。
-const UPDATE_PUBKEY_HEX: &str = "bea83f4eba178479cf0352ea61b20bbee91b983682cd36adefb1975e91124695";
+/// ## 轮换记录
+///
+/// 2026-11-12 换过一次：旧私钥 `bea83f4e…`（指纹取公钥前 8 字节）在生成时被
+/// `println!` 打到了终端，进了终端回滚缓冲与若干次会话记录，按「已泄露」处理。
+/// 现在这把指纹是 `28d4990de6aef54a`，私钥只落盘在发版机的
+/// `~/.paypulse-signing-key-*.txt`（生成后导入密码管理器即删）。
+/// `gen-update-key --check <私钥文件>` 可以核对「私钥 ↔ 这里的公钥」是否配对。
+///
+/// ## ⚠️ 换公钥 = 老客户端再也验不过新清单
+///
+/// 只认一把公钥，没有过渡期双公钥兼容。所以轮换的实际代价是：
+/// **已安装的旧版本从此收不到自动更新，必须手动装一次带新公钥的版本。**
+/// 这次轮换随 0.1.4 一起发，装完 0.1.4 之后就恢复正常。
+const UPDATE_PUBKEY_HEX: &str = "4e40f24d6ee7f11701847cb34bc62297f047755818b36cb2cd34913075f96e7b";
 
 /// 清单地址。`releases/latest/download/<asset>` 会 302 到「当前最新 release 的
 /// 同名资产」——这样客户端不必知道版本号，也不用调 GitHub API。
@@ -346,6 +357,18 @@ mod tests {
         assert!(pubkey().is_some());
         // 长度必须是 32 字节（64 hex 字符）
         assert_eq!(UPDATE_PUBKEY_HEX.len(), 64);
+    }
+
+    /// 2026-11-12 轮换掉的旧公钥（私钥曾出现在终端记录里，按已泄露处理）。
+    /// 钉住它，防止有人手滑改回去——改回去等于把已泄露的私钥重新扶正。
+    #[test]
+    fn leaked_public_key_is_gone_for_good() {
+        assert_ne!(
+            UPDATE_PUBKEY_HEX, "bea83f4eba178479cf0352ea61b20bbee91b983682cd36adefb1975e91124695",
+            "这把公钥对应的私钥已经泄露，不能再出现在客户端里"
+        );
+        // 换上的这把得是真的公钥点（能构造出 VerifyingKey），不是随手敲的 hex
+        assert!(pubkey().is_some(), "更新公钥不是一个合法的 Ed25519 公钥点");
     }
 
     /// 单测只测「拿到清单之后」那半截（`evaluate` 是纯函数）。

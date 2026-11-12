@@ -32,6 +32,7 @@ mod sound;
 mod crash;
 mod fill;
 mod net;
+mod single;
 mod ask_win;
 mod detail;
 mod menu;
@@ -2107,6 +2108,24 @@ fn heartbeat(app: &tauri::AppHandle, last: &mut i64) {
 }
 
 pub fn run() {
+    // 单实例判定必须在**建任何窗口之前**：晚一步就会先起一个隐藏的 HUD
+    // 和一套 WebView2 进程，再退掉——用户能看到托盘图标一闪。
+    //
+    // 代价是这一步跑在 `log::init` 之前，写不了日志文件（配置目录要靠
+    // `AppHandle` 才拿得到）。第二个实例只在 stderr 留一行，而且这里
+    // **故意不走 `app.exit()`**：那条路会触发退出时的 `flush()`，把
+    // `last_alive` 和配置重写一遍——第二个实例一行都不该碰用户的数据。
+    if !single::claim() {
+        let pid = single::existing_pid();
+        let woken = single::activate();
+        eprintln!(
+            "已经有实例在跑（PID {}），本次启动退出；唤出悬浮窗={}",
+            pid,
+            if woken { "成功" } else { "没找到窗口（悬浮窗可能被关掉了）" }
+        );
+        std::process::exit(0);
+    }
+
     let app = tauri::Builder::default()
         .setup(|app| {
             let dir = app.path().app_config_dir()?;
