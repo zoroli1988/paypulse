@@ -101,7 +101,16 @@
      两边都要记一笔，否则下一拍又弹回来。落脚点在 Rust 的 CloseRequested 里。 */
   el.closeBtn.addEventListener("click", function () {
     if (window.__TAURI__ && window.__TAURI__.window) {
-      window.__TAURI__.window.getCurrentWindow().close();
+      // 和引导窗同样接住异常：这扇窗要是不关，用户就被一条「时区变了」拦在门口，
+      // 而它一年才出现一次，出问题也没人知道该报什么。
+      try {
+        var r = window.__TAURI__.window.getCurrentWindow().close();
+        if (r && typeof r.catch === "function") {
+          r.catch(function (e) { console.error("询问窗 close 失败", e); });
+        }
+      } catch (e) {
+        console.error("询问窗 close 抛异常", e);
+      }
     }
   });
 

@@ -297,7 +297,17 @@
 
   function close() {
     if (window.__TAURI__ && window.__TAURI__.window) {
-      window.__TAURI__.window.getCurrentWindow().close();
+      // 这里以前是裸调 `close()`。它会被 ACL 拒掉（权限没配时），而返回的
+      // promise 没人接 → 静默失败 → 窗口永远停在「正在保存…」。
+      // 现在两头都堵上：JS 里接住异常，后端在首启落盘后也会主动收起引导窗。
+      try {
+        var r = window.__TAURI__.window.getCurrentWindow().close();
+        if (r && typeof r.catch === "function") {
+          r.catch(function (e) { console.error("引导窗 close 失败（后端会兜住）", e); });
+        }
+      } catch (e) {
+        console.error("引导窗 close 抛异常（后端会兜住）", e);
+      }
     }
   }
 

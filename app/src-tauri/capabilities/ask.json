@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "ask",
+  "description": "时区 / 补记询问窗：要能关掉自己（关掉 = 按默认处理），也要能拖动标题栏",
+  "windows": ["ask"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-close",
+    "core:window:allow-start-dragging",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten"
+  ]
+}

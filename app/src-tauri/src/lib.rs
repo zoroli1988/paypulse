@@ -2277,6 +2277,26 @@ pub fn run() {
                 let _ = onboard_win::open(app.handle());
             }
 
+            // 调试用：`PAYPULSE_AUTOCLICK=1` 启动 4 秒后自动点一次引导页的
+            // 「开始计时」，把「首启落盘 → 引导窗收起 → 悬浮窗露脸」整条链路
+            // 跑一遍。v0.1.6 的「点完成卡在正在保存」就是靠它定位的：
+            // 那次 apply_settings 全部跑完，引导窗却一直可见——因为 onboard 没有
+            // capability，`getCurrentWindow().close()` 被 ACL 拒掉且无人接 promise。
+            // 只在调试构建里生效，发布版不会因为这个环境变量多出任何行为。
+            #[cfg(debug_assertions)]
+            if std::env::var("PAYPULSE_AUTOCLICK").is_ok() {
+                let h = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(4));
+                    if let Some(w) = h.get_webview_window(onboard_win::LABEL) {
+                        log::w("首启自检：自动点击「开始计时」");
+                        let _ = w.eval("document.getElementById('finish').click(); 'clicked'");
+                    } else {
+                        log::w("首启自检：找不到引导窗");
+                    }
+                });
+            }
+
             // 调试用：`PAYPULSE_ONBOARD=1` 启动时直接拉起引导窗口。
             // 非交互桌面上点不到托盘，首启又只发生一次，没有这个钩子就没法截图验版式。
             #[cfg(debug_assertions)]

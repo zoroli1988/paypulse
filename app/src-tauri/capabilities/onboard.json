@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "onboard",
+  "description": "首次引导窗：要能关掉自己（完成 → close → 隐藏），也要能拖动标题栏",
+  "windows": ["onboard"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-close",
+    "core:window:allow-start-dragging"
+  ]
+}

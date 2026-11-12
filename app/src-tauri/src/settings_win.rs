@@ -992,6 +992,15 @@ pub fn apply_settings(app: AppHandle, patch: Patch) -> SettingsView {
     // 之前它是藏着的——让人先看到「示例 8000 块」在那儿跳，再看到他自己的数，
     // 那半秒足够让人认定这软件在瞎算。`take_fresh` 保证只露这一次。
     if st.take_fresh() {
+        // 首启落盘成功 = 引导结束，引导窗由**后端**收起来。
+        //
+        // 原先只靠引导页 JS 里的 `getCurrentWindow().close()`。那条路依赖
+        // capability 里给的 `core:window:allow-close`，而 `onboard` 当时根本没有
+        // capability 文件——调用被 ACL 拒掉、promise 静默 reject，窗口就永远停在
+        // 「正在保存…」上，用户看到的是「点完成没反应 + 悬浮窗不动」。
+        // 权限已经补上（capabilities/onboard.json），这里再兜一层：
+        // 数据都落盘了，就不能有任何一个前端异常把用户困在引导里。
+        crate::onboard_win::close(&app);
         if let Some(win) = app.get_webview_window(crate::HUD_LABEL) {
             let _ = win.show();
             crate::clamp_into_screen(&win);
@@ -999,7 +1008,8 @@ pub fn apply_settings(app: AppHandle, patch: Patch) -> SettingsView {
         crate::tray::sync_checks(&app);
     }
 
-    view(&app)
+    let v = view(&app);
+    v
 }
 
 /// 打开（或唤到前台）设置窗口。
