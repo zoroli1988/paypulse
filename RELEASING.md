@@ -45,6 +45,20 @@ bash publish.sh check-key ~/.paypulse-signing-key-20261112.txt   # 核对与 upd
 | `PAYPULSE_CORE_PAT` | 有私有仓 `paypulse-core` 读权限的 personal access token | CI 拉私有引擎 submodule |
 | `UPDATE_SIGNING_KEY` | 上面生成的私钥 hex | release 时给安装包签名 |
 
+> ⚠️ **revoke 任何一个 PAT 之后，必须把新 PAT 同步写回 `PAYPULSE_CORE_PAT`。**
+> `release.yml` 的两个编译 job 都用它 checkout，它失效时 CI 在**第一步 checkout**
+> 就会挂，报 `fatal: could not read Username for 'https://github.com': terminal prompts disabled`——
+> 看着像网络问题，其实是凭据没了。2026-11-12 轮换签名私钥顺带 revoke 旧 PAT 时就踩过一次，
+> 整条流水线在 1 分钟内失败。
+>
+> 重写方式（token 只从文件或环境变量读，不进命令行）：
+>
+> ```bash
+> python tools/set-secret.py PAYPULSE_CORE_PAT ~/.paypulse-pat
+> ```
+>
+> 写完重跑失败的 run：`POST /repos/{owner}/{repo}/actions/runs/{id}/rerun`。
+
 ## 三、发一个版本
 
 1. 改 `app/src-tauri/Cargo.toml` 的 `version`（和 `app/package.json` 保持一致）
