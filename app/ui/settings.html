@@ -816,7 +816,16 @@
 
         <div class="blk">
           <div class="blk-t" style="margin-bottom:8px">更新日志</div>
-          <div class="log-row"><b>0.1.0</b><span style="flex:1;color:var(--text2);margin-left:0">实时悬浮窗、双账（月薪 / 白干）、三档尺寸、请假态、排班形态、节假日与补班、年终奖摊分、通知三件套、全局快捷键、开机自启、空闲检测</span><span style="color:var(--green)">当前版本</span></div>
+          <!-- 右侧那列说的是「这一版跟你现在跑的关系」，不是写死的文案：
+               data-ver 与运行时版本相等 → 当前版本；比运行时新 → 未安装；
+               更旧 → 显示 data-date。原型 05-D 就是这三列的排法。
+               之前这里写死了一行「0.1.0 … 当前版本」，升到 0.1.5 之后
+               这句话就开始撒谎。 -->
+          <div id="logRows">
+            <div class="log-row" data-ver="0.1.5" data-date="2026-11-12"><b>0.1.5</b><span style="flex:1;color:var(--text2);margin-left:0">macOS 也能收到更新；检查更新改由原生拉取；缺本平台安装包不再误报成验签失败</span><span class="log-tail"></span></div>
+            <div class="log-row" data-ver="0.1.4" data-date="2026-11-12"><b>0.1.4</b><span style="flex:1;color:var(--text2);margin-left:0">单实例保护、签名密钥轮换；下班提示音、崩溃日志、系统时间改动提醒、关机补记</span><span class="log-tail"></span></div>
+            <div class="log-row" data-ver="0.1.0" data-date="2026-11-01"><b>0.1.0</b><span style="flex:1;color:var(--text2);margin-left:0">实时悬浮窗、双账（月薪 / 白干）、三档尺寸、请假态、排班形态、节假日与补班、年终奖摊分、通知三件套、全局快捷键、开机自启、空闲检测</span><span class="log-tail"></span></div>
+          </div>
         </div>
 
         <div class="about-foot">

@@ -219,6 +219,47 @@
     el.kDir.textContent = v.data_dir;
     txt("kVer", v.version);
     txt("verLine", "PayPulse · 版本 " + v.version);
+    markChangelog(v.version);
+  }
+
+  /* ---- 更新日志的「当前版本 / 未安装 / 日期」----
+
+     原型 05-D 的三行里，最右那列说的是「这一版跟你现在跑的什么关系」，
+     不是写死的文案。之前实现塌成了一行写死的「0.1.0 · 当前版本」，
+     升到 0.1.5 之后这句话就不成立了——用户看到版本号那栏是 0.1.5，
+     更新日志里却写着 0.1.0 是当前版本。
+     所以按 data-ver 跟运行时版本比一次，运行时改，界面就跟着改。 */
+  function cmpVer(a, b) {
+    var pa = String(a || "").split(".");
+    var pb = String(b || "").split(".");
+    var n = Math.max(pa.length, pb.length);
+    for (var i = 0; i < n; i++) {
+      var x = parseInt(pa[i] || "0", 10) || 0;
+      var y = parseInt(pb[i] || "0", 10) || 0;
+      if (x !== y) return x - y;
+    }
+    return 0;
+  }
+
+  function markChangelog(cur) {
+    var rows = document.querySelectorAll("#logRows .log-row");
+    for (var i = 0; i < rows.length; i++) {
+      var row = rows[i];
+      var tail = row.querySelector(".log-tail");
+      if (!tail) continue;
+      var ver = row.getAttribute("data-ver") || "";
+      if (ver && cmpVer(ver, cur) === 0) {
+        tail.textContent = "当前版本";
+        tail.className = "log-tail on";
+      } else if (ver && cmpVer(ver, cur) > 0) {
+        // 比运行时新：这份客户端里还没有它（原型里 1.0.1 那行写的「未安装」）
+        tail.textContent = "未安装";
+        tail.className = "log-tail off";
+      } else {
+        tail.textContent = row.getAttribute("data-date") || "";
+        tail.className = "log-tail";
+      }
+    }
   }
 
   /* ---- 年终奖的两个动态块 ---- */

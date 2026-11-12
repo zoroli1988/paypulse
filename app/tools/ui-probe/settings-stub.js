@@ -89,7 +89,7 @@
     day_yuan: 367.82,
     hourly_yuan: 52.01,
     per_sec_yuan: 0.014447,
-    version: "0.1.0",
+    version: "0.1.5",
     data_dir: "C:\\Users\\zorol\\AppData\\Roaming\\com.bydota.paypulse",
     paused: false,
     crash_log: false,
@@ -138,6 +138,34 @@
         }
         if (cmd === "crash_clear") return Promise.resolve(null);
         if (cmd === "sound_preview") return Promise.resolve(null);
+        // ?upd=mac|win|nopkg|latest 让「关于」那格停在指定结果上，
+        // 用来拍检查更新的几种分支（mac 的 dmg 提示、缺包的中性格）
+        if (cmd === "check_update") {
+          var u = new URLSearchParams(location.search).get("upd");
+          var base = {
+            current: "0.1.5",
+            latest: "0.1.6",
+            forced: false,
+            sha256: "f128affe1c7b3f1e",
+            url: "https://example.com/paypulse-setup",
+            size: 2147458,
+            message: "有新版本 0.1.6"
+          };
+          if (u === "nopkg") {
+            base.state = "no-package";
+            base.latest = "";
+            base.platform = "windows";
+            base.message = "这一版还没有提供 darwin-arm64 的安装包";
+          } else if (u === "latest") {
+            base.state = "latest";
+            base.latest = "0.1.5";
+            base.message = "0.1.5 已是最新版本";
+          } else {
+            base.state = "available";
+            base.platform = u === "win" ? "windows" : "darwin";
+          }
+          return Promise.resolve(base);
+        }
         return Promise.resolve(null);
       }
     },

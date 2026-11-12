@@ -294,6 +294,11 @@ html, body {
 .log-row b { font-family: var(--mono); color: var(--green); font-size: 10.5px; flex: none; width: 38px; }
 .log-row span { color: #6B7480; font-family: var(--mono); font-size: 9.5px; margin-left: auto; flex: none; }
 
+/* 更新日志右侧那列：跟当前运行版本的关系。原型里「当前版本」是绿色的内联 style，
+   改成类之后由 JS 按运行时版本决定，不再写死。 */
+.log-tail.on { color: var(--green); }
+.log-tail.off { color: #4E5763; }
+
 .about-foot {
   margin-top: 16px; padding-top: 12px; border-top: 1px solid rgba(255, 255, 255, .06);
   display: flex; align-items: center; justify-content: center;
