@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>时区变了 · 牛马薪动了！</title>
+<link rel="stylesheet" href="ask.css" />
+</head>
+<body>
+<!-- 时区变了：出差落地、系统时区跨了 2 小时以上才会弹的**一次性**询问。
+     规格 02-B 原文：「以设备当前时区解释作息表；若变更超过 2 小时，弹窗询问
+     「按哪边算」，一次确认，不反复打扰。」
+
+     两个数必须都摆出来，而且摆的是**换算后的时刻**：
+     只写「跟随系统 / 固定 UTC+8」是在问一个抽象问题，用户答不上来；
+     写「当地 09:00 = 北京 08:00」他才看得懂自己在选什么。
+
+     这扇窗没有原型稿（原型只写了上面那一行规格）。版式照 onboarding 那套
+     窗口语言做：32px 标题栏、#141820 面板、11.5px 副标、34px 按钮，
+     尺寸按内容定 420×256。 -->
+<div class="app">
+  <div class="bar" data-tauri-drag-region>
+    <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+    <span class="bt">时区变了</span>
+    <button class="x" id="closeBtn" title="关掉（保持现状）">✕</button>
+  </div>
+
+  <div class="body">
+    <div class="h">今天按哪边的钟算？</div>
+    <div class="sub" id="sub">系统时区是 UTC+9，比上次的 UTC+8 早 1 小时。</div>
+
+    <div class="cmp">
+      <div class="row">
+        <span class="k">按本地时间 <em id="tzNow">UTC+9</em></span>
+        <span class="v mono" id="vLocal">当地 09:00 = 北京 08:00</span>
+      </div>
+      <div class="row">
+        <span class="k">按公司时间 <em id="tzCompany">UTC+8</em></span>
+        <span class="v mono" id="vCompany">北京 09:00 = 当地 10:00</span>
+      </div>
+    </div>
+
+    <div class="hint">只问这一次。同一趟出差里不会再来问。</div>
+
+    <div class="acts">
+      <button class="btn-g" id="pickLocal">按本地时间</button>
+      <button class="btn-p" id="pickCompany">按公司时间（UTC+8）</button>
+    </div>
+  </div>
+</div>
+<script src="ask.js"></script>
+</body>
+</html>

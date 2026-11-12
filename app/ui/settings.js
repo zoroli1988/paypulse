@@ -36,7 +36,7 @@
     "swEnd", "endChips", "swLunch", "lunchChips", "swSit", "segSit",
     "swDnd", "dndFrom", "dndTo",
     "clrToday", "clrMonth", "clrAll", "clrBox", "clrWhat", "clrWord", "clrGo", "clrCancel",
-    "welcome", "welcomeGo", "updBody", "btnCheck", "updChan", "updSub"
+    "updBody", "btnCheck", "updChan", "updSub"
   ].forEach(function (id) { el[id] = document.getElementById(id); });
 
   var view = null;
@@ -427,14 +427,6 @@
       .then(function () {
         busy = false;
         if (queued) { var p = queued; queued = null; apply(p); }
-        // 任何一次落盘之后，首启引导就完成使命了：
-        // 用户可能先改月薪（change 就写盘了）再想起点「开始」，
-        // 也可能一次都没点。这条判断两种顺序都对。
-        if (el.welcome && !el.welcome.hidden) {
-          invoke("first_run").then(function (on) {
-            if (!on) el.welcome.hidden = true;
-          }).catch(function () {});
-        }
       });
   }
 
@@ -837,40 +829,23 @@
     console.error("读设置失败", e);
   });
 
-  /* 首启引导。`first_run` 读的是「启动那一刻配置文件在不在」——
-     所以它只会在新装那一次为真，升级上来的老用户不会被弹一次。
-     点「开始」发一个空补丁：空补丁也会走一遍「合并 → 校验 → 原子写」，
-     正好把配置落下来，Rust 那边顺手让悬浮窗露脸。 */
-  invoke("first_run")
-    .then(function (on) {
-      if (!on || !el.welcome) return;
-      el.welcome.hidden = false;
-      // 光标直接落在月薪上，并且全选：用户想干的第一件事就是把它替换掉，
-      // 而不是先找地方点一下。光标放这儿，「填两个数」才不是一句空话。
-      // 延一帧：`fill()` 可能还在路上，它会把 value 重写一遍、顺手清掉选区。
-      setTimeout(function () {
-        var m = document.getElementById("fMonth");
-        if (m) {
-          m.focus();
-          m.select();
-        }
-      }, 80);
-    })
-    .catch(function () {});
-
-  if (el.welcomeGo) {
-    el.welcomeGo.addEventListener("click", function () {
-      // 光标还在某个输入框里时，change 事件可能还没发出去；先让它失焦
-      if (document.activeElement && document.activeElement.blur) {
-        document.activeElement.blur();
-      }
-      apply({});
-      el.welcome.hidden = true;
-      // 悬停焦点回到第一组，让用户接着看自己填的那些数
-      var pay = document.querySelector('.nav .i[data-g="pay"]');
-      if (pay) pay.click();
+  /* 别的窗口改了配置，这里要跟着刷新。
+     具体场景：「时区变了」那扇窗问完并落盘之后，设置页的「时区策略」下拉
+     还停在旧值——用户会看到「这里写着跟随系统、实际已经按 UTC+8 算」。
+     两个界面各说各话比不做这个功能更糟，所以后端落盘后会 emit 一次，
+     这里重拉一遍（不重拉整个窗口，只重填表单）。 */
+  if (window.__TAURI__ && window.__TAURI__.event) {
+    window.__TAURI__.event.listen("settings-changed", function () {
+      invoke("get_settings").then(fill).catch(function (e) {
+        console.error("重读设置失败", e);
+      });
     });
   }
+
+  /* 首启引导搬到独立窗口了（onboard.html，560×640 四步向导）。
+     这里原来挂一条绿色横幅，等于把原型的四步流程退化成了一个提示条；
+     现在设置页不再承担引导职能，所以 `first_run` 在这里不用再问。 */
+
 
   /* ---- 检查更新 ----
 

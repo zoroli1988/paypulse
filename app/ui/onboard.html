@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>首次引导 · 牛马薪动了！</title>
+<link rel="stylesheet" href="onboard.css" />
+</head>
+<body>
+<!-- 首次引导：结构和文案照 paypulse-prototype.html「03 首次引导」——四步、560×640。
+     上一版把这一步退化成了设置页顶部的一条横幅，等于丢掉引导的三条原则：
+       ① 不给空白输入框（预填人均值，用户只做「确认」不做「填写」）
+       ② 不要求注册登录（本地存储即可用，第 1 步填完就能看到数字）
+       ③ 第 3 步给视觉预览（在引导里就能把悬浮窗摆好）
+
+     写盘的时机只有一个：第 4 步点「开始计时」。前面三步所有值只存在前端 draft 里，
+     因为 README 那条约定——「第一次写盘那一刻，悬浮窗才露脸」。提前写盘的话，
+     用户会在还没填完的时候就看见一个按半套配置算出来的金额。
+
+     关掉窗口 = 没写盘 = 下次启动再来一次。数据没落盘就等于没设置过。 -->
+<div class="app">
+  <div class="bar" data-tauri-drag-region>
+    <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+    <span class="bt" id="barTitle">牛马薪动了 · 第 1 步 / 共 4 步</span>
+    <button class="x" id="closeBtn" title="关闭">✕</button>
+  </div>
+
+  <div class="steps" id="steps">
+    <i class="on"></i><i></i><i></i><i></i>
+  </div>
+
+  <!-- ===================== 第 1 步：工资 ===================== -->
+  <section class="pane on" data-s="1">
+    <div class="ph">
+      <div class="h">先告诉我你的工资</div>
+      <div class="sub">只存本地，不上传。随时可改。</div>
+    </div>
+
+    <div class="field">
+      <label for="fMonth">你的月薪</label>
+      <input class="inp mono" id="fMonth" type="number" step="0.01" min="1" value="8000" />
+      <div class="hint">先填一个数，口径在下面选。之后可在设置中心随时改，历史不会重算。</div>
+    </div>
+
+    <div class="field">
+      <label>口径</label>
+      <div class="chips" id="basisChips">
+        <span class="chip on" data-b="1">税前（应发）</span>
+        <span class="chip" data-b="0">税后（到手）</span>
+      </div>
+      <div class="hint">税前＝合同上写的应发；税后＝银行卡实际到账。两者只差你填哪个数，算法完全一样。</div>
+    </div>
+
+    <div class="calc">
+      按此计算：日薪 <b class="mono" id="cDay">¥367.82</b>
+      <span class="sep">·</span> 时薪 <b class="mono" id="cHour">¥49.04</b>
+      <span class="sep">·</span> 每秒 <b class="mono" id="cSec">¥0.0136</b>
+    </div>
+
+    <div class="acts right">
+      <button class="btn-p" id="next1">继续</button>
+    </div>
+  </section>
+
+  <!-- ===================== 第 2 步：作息 ===================== -->
+  <section class="pane" data-s="2">
+    <div class="ph">
+      <div class="h">你的上班节奏</div>
+      <div class="sub">决定进度条什么时候跑、什么时候停。</div>
+    </div>
+
+    <div class="field">
+      <label>排班形态</label>
+      <div class="chips" id="weekChips">
+        <span class="chip on" data-f="five">双休</span>
+        <span class="chip" data-f="bigsmall">大小周</span>
+        <span class="chip" data-f="six">单休</span>
+        <span class="chip" data-f="flex">弹性</span>
+      </div>
+      <div class="hint">这里问的是<b>你哪几天上班</b>，不是法律上的工时制度（标准工时 / 综合计算工时 / 不定时）。后者影响加班怎么算，本工具按标准工时制折算。</div>
+    </div>
+
+    <div class="row2">
+      <div class="field"><label for="fStart">上班</label><input class="inp mono" id="fStart" value="09:00" /></div>
+      <div class="field"><label for="fEnd">下班</label><input class="inp mono" id="fEnd" value="18:00" /></div>
+    </div>
+    <div class="row2">
+      <div class="field"><label for="fL1">午休起</label><input class="inp mono" id="fL1" value="12:00" /></div>
+      <div class="field"><label for="fL2">午休止</label><input class="inp mono" id="fL2" value="13:30" /></div>
+    </div>
+
+    <div class="hint tight" id="spanHint">计薪工时 = 09:00–18:00 扣除 1.5h 午休 = <b>7.5 小时</b></div>
+
+    <div class="acts">
+      <button class="btn-g" id="prev2">上一步</button>
+      <button class="btn-p" id="next2">继续</button>
+    </div>
+  </section>
+
+  <!-- ===================== 第 3 步：位置与形态 ===================== -->
+  <section class="pane" data-s="3">
+    <div class="ph">
+      <div class="h">它会出现在这里</div>
+      <div class="sub">拖动预览窗口，定好位置后它就一直待在哪儿。</div>
+    </div>
+
+    <!-- 桌面示意区：拖的是这块小卡片，松手记下相对位置（0~1），
+         点「继续」时后端按主屏工作区折算成真实像素写进 settings.win。
+         不在这里挪真的悬浮窗——它这会儿还藏着（首启没露脸）。 -->
+    <div class="desk" id="desk">
+      <div class="hudmini" id="hudMini">
+        <div class="r"><span>今日已赚</span><span class="b">在岗</span></div>
+        <div class="a mono">288.968</div>
+        <div class="r2"><span class="mono">已工作 05:53:32</span><span class="mono">79%</span></div>
+        <div class="p"><i style="width:79%"></i></div>
+      </div>
+    </div>
+
+    <div class="zrow">
+      <label>默认尺寸</label>
+      <div class="chips" id="sizeChips">
+        <span class="chip" data-z="compact">紧凑</span>
+        <span class="chip on" data-z="standard">标准</span>
+        <span class="chip" data-z="expanded">展开</span>
+      </div>
+    </div>
+
+    <div class="swrow">
+      <div>
+        <div class="t2">开机自动启动</div>
+        <div class="hint tight">开机后在托盘静默启动，不弹窗</div>
+      </div>
+      <div class="sw on" id="swAuto" role="switch" aria-checked="true" tabindex="0"></div>
+    </div>
+
+    <div class="acts">
+      <button class="btn-g" id="prev3">上一步</button>
+      <button class="btn-p" id="next3">继续</button>
+    </div>
+  </section>
+
+  <!-- ===================== 第 4 步：完成 ===================== -->
+  <section class="pane" data-s="4">
+    <div class="done">
+      <div class="logo">
+        <svg viewBox="0 0 48 48" aria-hidden="true">
+          <path d="M14.6 11.4 C 12.4 8.2, 10.6 4.2, 10 1.2 C 13.4 4.8, 16.4 8.5, 18 11 Z" fill="#04160C"/>
+          <path d="M33.4 11.4 C 35.6 8.2, 37.4 4.2, 38 1.2 C 34.6 4.8, 31.6 8.5, 30 11 Z" fill="#04160C"/>
+          <ellipse cx="16.8" cy="23" rx="6.7" ry="7" fill="#fff"/>
+          <ellipse cx="31.2" cy="23" rx="6.7" ry="7" fill="#fff"/>
+          <path d="M14.2 19 L16.8 21.5 L19.4 19" stroke="#04160C" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M16.8 21.5 V27.6" stroke="#04160C" stroke-width="1.8" stroke-linecap="round"/>
+          <path d="M14.2 23.4 H19.4" stroke="#04160C" stroke-width="1.8" stroke-linecap="round"/>
+          <path d="M14.2 25.6 H19.4" stroke="#04160C" stroke-width="1.8" stroke-linecap="round"/>
+          <path d="M28.6 19 L31.2 21.5 L33.8 19" stroke="#04160C" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M31.2 21.5 V27.6" stroke="#04160C" stroke-width="1.8" stroke-linecap="round"/>
+          <path d="M28.6 23.4 H33.8" stroke="#04160C" stroke-width="1.8" stroke-linecap="round"/>
+          <path d="M28.6 25.6 H33.8" stroke="#04160C" stroke-width="1.8" stroke-linecap="round"/>
+          <ellipse cx="24" cy="32" rx="6.9" ry="4.1" fill="#04160C"/>
+          <ellipse cx="21.6" cy="32" rx="1.3" ry="1.7" fill="#35E07F"/>
+          <ellipse cx="26.4" cy="32" rx="1.3" ry="1.7" fill="#35E07F"/>
+          <circle cx="24" cy="41.2" r="3.1" stroke="#04160C" stroke-width="1.75" fill="none"/>
+        </svg>
+      </div>
+      <div class="h">可以开工了</div>
+      <div class="sub">悬浮窗已经在桌面右下角待命</div>
+    </div>
+
+    <div class="sum">
+      <div class="sr"><span>日薪</span><b class="mono" id="sDay">¥367.82</b></div>
+      <div class="sr"><span>时薪</span><b class="mono" id="sHour">¥49.04</b></div>
+      <div class="sr"><span>计薪工时</span><b class="mono" id="sSpan">7.5 h</b></div>
+      <div class="sr"><span>本月工作日</span><b class="mono" id="sDays">21 天</b></div>
+    </div>
+
+    <div class="keys">
+      快捷键 <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> 随时显隐 ·
+      右键悬浮窗可暂停、切换尺寸、打开设置
+    </div>
+
+    <div class="warn">
+      <b>提醒：</b>数据只存本机，没有云端也没有备份。换电脑重新配置一遍即可，历史不跟过去。
+    </div>
+
+    <div class="acts center">
+      <button class="btn-p wide" id="finish">开始计时</button>
+    </div>
+  </section>
+</div>
+<script src="onboard.js"></script>
+</body>
+</html>

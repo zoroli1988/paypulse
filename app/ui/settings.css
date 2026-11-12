@@ -460,24 +460,7 @@ html, body {
 }
 .clr-box[hidden] { display: none; }
 
-/* ---- 首启引导条 ----
-   只在第一次启动出现（配置文件还不存在的那一次）。
-   做成一横幅而不是弹窗：它不该挡着用户先去改别的设置，
-   也不该有一个「跳过」按钮——跳过之后他看到的还是示例的 8000 块。 */
-.welcome {
-  display: flex; align-items: center; gap: 14px;
-  margin: 0 0 16px; padding: 12px 14px; border-radius: 10px;
-  border: 1px solid rgba(53, 224, 127, .35);
-  background: rgba(53, 224, 127, .07);
-}
-.welcome[hidden] { display: none; }
-.w-l { min-width: 0; }
-.w-t { font-size: 12.5px; font-weight: 620; color: var(--green); }
-.w-d { margin-top: 3px; font-size: 11px; line-height: 1.6; color: var(--muted); }
-.w-go {
-  flex: none; margin-left: auto; height: 28px; padding: 0 18px;
-  border: 0; border-radius: 9px; cursor: pointer;
-  font-family: inherit; font-size: 11.5px; font-weight: 620; color: #08150E;
-  background: linear-gradient(180deg, #4BE98C, #2CC96C);
-}
-.w-go:hover { filter: brightness(1.06); }
+/* 首启引导条已删除：首启改由独立窗口 onboard.html 承担（原型「03 首次引导」
+   的四步向导 560×640）。原来那条绿色横幅只是把用户丢进七组设置里自己找月薪，
+   和原型的「90 秒内完成配置」完全是两回事。 */
+

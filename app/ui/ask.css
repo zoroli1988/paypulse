@@ -1,0 +1,165 @@
+/* 「时区变了」询问窗。
+ *
+ * 没有原型稿（原型只在状态表里写了一行规格），所以版式**照搬 onboarding 的窗口语言**：
+ * 标题栏 32px / #1B202A、面板 #141820、副标 11.5px #7E8792、提示 10.5px #6B7480、
+ * 按钮 34px 高、主按钮是 `linear-gradient(180deg,#3EE689,#22B863)` 的渐变绿。
+ *
+ * 两处是这扇窗独有的：
+ *   1. 对照表（.cmp）—— 底色比面板更深一档（#0C1015，和输入框同色），
+ *      因为这一块是「读的数字」不是「点的按钮」，压下去才像一块仪表；
+ *   2. 右列用等宽字体（.mono）—— 四个时刻要对齐着比，比例字体一宽一窄就比不出来。
+ */
+
+:root {
+  --panel: #141820;
+  --panel2: #1B202A;
+  --ink: #0C1015;
+  --line: rgba(255, 255, 255, .07);
+  --line2: rgba(255, 255, 255, .1);
+  --text: #E8ECF1;
+  --text2: #B4BAC2;
+  --muted: #7A838F;
+  --dim: #6B7480;
+  --green: #35E07F;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  color: var(--text);
+  font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 13px;
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: default;
+}
+
+.app {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--line2);
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 18px 40px -18px rgba(0, 0, 0, .7), 0 0 0 .5px rgba(0, 0, 0, .6);
+}
+
+/* ---------- 标题栏：和引导窗同一份（32px / #1B202A）---------- */
+.bar {
+  height: 32px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 12px;
+  background: var(--panel2);
+  border-bottom: 1px solid rgba(0, 0, 0, .4);
+}
+.bar .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.bar .r { background: #FF5F57; }
+.bar .y { background: #FEBC2E; }
+.bar .g { background: #28C840; }
+.bar .bt { font-size: 11px; color: var(--muted); margin-left: 6px; }
+.bar .x {
+  margin-left: auto;
+  width: 24px; height: 20px;
+  border: 0; border-radius: 6px;
+  background: transparent; color: var(--muted);
+  font-size: 11px; line-height: 1; cursor: pointer;
+}
+.bar .x:hover { background: rgba(255, 95, 87, .16); color: #FF8A8A; }
+
+/* ---------- 正文 ---------- */
+.body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 14px 16px 16px;
+}
+
+.h { font-size: 15px; font-weight: 650; margin-bottom: 4px; flex: none; }
+.sub { font-size: 11.5px; color: #7E8792; line-height: 1.5; flex: none; }
+
+/* ---------- 两行对照 ---------- */
+.cmp {
+  margin-top: 11px;
+  flex: none;
+  background: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  overflow: hidden;
+}
+.cmp .row {
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 11px;
+}
+.cmp .row + .row { border-top: 1px solid var(--line); }
+.cmp .k {
+  font-size: 11.5px;
+  color: var(--text2);
+  white-space: nowrap;
+}
+/* 时区标记：一块小牌，颜色比正文暗，避免和「按本地/按公司」抢注意力 */
+.cmp .k em {
+  font-style: normal;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--dim);
+  margin-left: 2px;
+}
+.cmp .v {
+  font-size: 11.5px;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+.hint {
+  margin-top: 9px;
+  font-size: 10.5px;
+  color: var(--dim);
+  flex: none;
+}
+
+/* ---------- 按钮（吸底，和引导窗同一套）---------- */
+.acts {
+  margin-top: auto;
+  padding-top: 12px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex: none;
+}
+.btn-p, .btn-g {
+  height: 34px;
+  padding: 0 16px;
+  border-radius: 8px;
+  border: 0;
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 600;
+  font-family: inherit;
+  transition: .15s;
+}
+.btn-p {
+  background: linear-gradient(180deg, #3EE689, #22B863);
+  color: #04150B;
+  box-shadow: 0 4px 14px -4px rgba(53, 224, 127, .6);
+}
+.btn-p:hover { filter: brightness(1.07); }
+.btn-g {
+  background: #232A34;
+  color: var(--text2);
+}
+.btn-g:hover { background: #2B333F; color: var(--text); }

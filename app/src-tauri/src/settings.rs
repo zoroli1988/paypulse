@@ -798,14 +798,25 @@ pub struct Settings {
     pub gross: bool,
     /// 时区策略：false = 跟随系统，true = 固定 UTC+8（Asia/Shanghai）。
     ///
-    /// 为什么只有两档，没有原型里那个「按当日首次活动所在地」：
-    /// 那一档要靠定位权限，而这个工具连网都不上。两档已经覆盖了真实场景——
-    /// 出差别国时系统时区会跟着变，跟着变就意味着「09:00 上班」变成当地时间 09:00，
-    /// 工作日被整体平移；固定住就等于「按公司那边的钟算」，这才是想问的事。
+    /// 两档就够了，因为「按哪边算」这个问题的答案只有两种：按人所在的地方，
+    /// 还是按公司发工资的地方。原型里那句「按当日首次活动所在地」要靠定位权限，
+    /// 而这个工具连网都不上——真按下去会是「猜你在哪」，猜错了比不问更糟。
+    ///
+    /// 这一档平时是用户在设置里手动选的，出差变时区时由 `tz_check` 主动问一次
+    /// （规格 02-B：变更超过 2 小时 → 弹窗问「按哪边算」，一次确认不反复打扰）。
     ///
     /// 它只改**墙上时钟**的读法，不改任何时间戳：暂停、加班起始点存的都是 epoch 秒，
     /// 换时区不会让已经记下的账重算。
     pub tz_fixed: bool,
+    /// 「时区变了」这条询问已经回答过（或确认过）的本地 UTC 偏移，单位秒。
+    ///
+    /// `None` = 这台机器上还没记录过。**不能拿 0 当哨兵**：UTC+0 是合法时区，
+    /// 拿 0 表示「没记录」会让伦敦用户的每一次启动都被问一遍。
+    ///
+    /// 为什么记偏移而不是记一个「问过没有」的布尔：出差是来回的。
+    /// 去一趟问一次是对的，同一个偏移问第二次就是打扰——所以基准要跟着走。
+    #[serde(default)]
+    pub tz_off: Option<i32>,
     /// 主题
     #[serde(deserialize_with = "de_theme")]
     pub theme: Theme,
@@ -918,6 +929,7 @@ impl Default for Settings {
             bonus: Bonus::default(),
             gross: true,
             tz_fixed: false,
+            tz_off: None,
             theme: Theme::Dark,
             num_font: NumFont::SfMono,
             copy_style: CopyStyle::Emotional,
@@ -1505,6 +1517,7 @@ mod tests {
             size: Size::Expanded,
             gross: false,
             tz_fixed: true,
+            tz_off: Some(9 * 3600),
             theme: Theme::Light,
             num_font: NumFont::JetBrains,
             copy_style: CopyStyle::Silent,

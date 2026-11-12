@@ -10,6 +10,7 @@
 //! 生成脚本见 `tools/make-icons/gen_tray.py`。
 
 use crate::AppState;
+use std::sync::Mutex;
 use tauri::menu::{CheckMenuItem, MenuBuilder, MenuEvent, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::image::Image;
@@ -28,6 +29,54 @@ const ID_RESET: &str = "reset-pos";
 const ID_QUIT: &str = "quit";
 
 const TRAY_ICON: &[u8] = include_bytes!("../icons/tray.png");
+
+/// 上一次真的写进托盘的那串字。
+///
+/// 为什么要缓存：看板线程一秒一拍，而 Windows 的 `set_tooltip` 每次都会把提示
+/// 窗口销毁重建。鼠标正悬在图标上时，重建一次闪一下——一秒十几次闪烁，
+/// 比不显示还糟。比对字符串之后只在「数字真的变了」时写。
+static LAST_HINT: Mutex<Option<String>> = Mutex::new(None);
+
+/// 把最新一帧写进托盘提示（mac 上是菜单栏标题）。
+///
+/// 只在**变化**时写，理由见 `LAST_HINT`。`None` 判断用 `as_deref` 而不是
+/// `==`，因为首次调用的缓存是 `None`，而提示永远不是空串。
+pub fn sync_hint(app: &AppHandle, snap: &crate::Snapshot) {
+    let Some(tray) = app.tray_by_id("main") else {
+        return;
+    };
+    let hint = crate::tray_hint(snap);
+    let mut first = false;
+    let changed = match LAST_HINT.lock() {
+        Ok(mut g) => {
+            if g.as_deref() == Some(hint.as_str()) {
+                false
+            } else {
+                first = g.is_none();
+                *g = Some(hint.clone());
+                true
+            }
+        }
+        // 锁中毒（别的线程 panic 在持有期间）时宁可直接写：一条提示比一致性重要。
+        Err(_) => true,
+    };
+    if !changed {
+        return;
+    }
+    // 只记第一次。之后每秒都可能变（金额一直在涨），全记下来会把日志刷成流水账，
+    // 而这条日志要回答的问题只有一个：「托盘提示这条路通不通」。
+    if first {
+        crate::log::w(&format!("托盘提示已接管：{hint}"));
+    }
+    let _ = tray.set_tooltip(Some(hint.as_str()));
+    // mac 的菜单栏可以直接显示文字，这是原型规格表里那一行「动态宽度」的实现：
+    // 图标 + `¥367.82` 并排，比悬停更快看到。Windows 没有这个能力，
+    // 所以按平台分开——不是「暂不实现」，是那边的托盘本来就不显示文字。
+    #[cfg(target_os = "macos")]
+    {
+        let _ = tray.set_title(Some(crate::tray_title(snap)));
+    }
+}
 
 /// 菜单项的句柄。
 ///

@@ -24,12 +24,14 @@ use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 mod log;
 mod platform;
+mod ask_win;
 mod detail;
 mod menu;
+mod onboard_win;
 mod settings;
 mod settings_win;
 mod toast;
@@ -658,7 +660,51 @@ fn hm_text(sec: u32) -> String {
     }
 }
 
+/// 托盘悬停提示。规格 02 的状态表：Win 托盘悬停显示今日已赚，mac 菜单栏直接显示。
+///
+/// 为什么要显示钱：这是这个产品唯一的存在理由，而用户把悬浮窗关掉之后，
+/// 剩在桌面上的就只有托盘图标。图标只能证明「程序还在」，说不出「今天赚了多少」——
+/// 悬停一句 `今日已赚 ¥123.45`，就把托盘从「还活着」升级成了「还能看」。
+///
+/// 但它**不能绕过隐藏金额**：那个开关是给开会投屏用的，托盘从背后把数字漏出来，
+/// 等于开关是假的。请假 / 休息 / 暂停同理，那几种状态下金额本身没有意义。
+pub(crate) fn tray_hint(s: &Snapshot) -> String {
+    const BRAND: &str = "牛马薪动了！";
+    if s.paused {
+        return format!("{BRAND} 已暂停");
+    }
+    if s.leave {
+        return format!("{BRAND} 今天请假");
+    }
+    if s.rest {
+        return format!("{BRAND} 今天休息");
+    }
+    if s.hide_money {
+        return BRAND.to_string();
+    }
+    format!("{BRAND} 今日已赚 {}", yuan(s.amount_milli, 2))
+}
+
+/// mac 菜单栏上那串字。
+///
+/// 菜单栏宽度是抢来的（旁边还有输入法、电池、时间），所以只留金额、不留品牌词：
+/// `¥367.82` 一眼能读完，`牛马薪动了！¥367.82` 会把别人的图标挤走。
+/// 休息 / 请假 / 隐藏金额时退成一个 `¥` —— 位置不能空着，否则菜单栏会跳。
+///
+/// Windows 上没人调它（那边的托盘不显示文字），但单测要能跑，所以不整个 cfg 掉。
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn tray_title(s: &Snapshot) -> String {
+    if s.rest || s.leave || s.hide_money {
+        return "¥".to_string();
+    }
+    yuan(s.amount_milli, 2)
+}
+
 /// 北京时间（UTC+8）的固定偏移。`east_opt` 对 8 小时恒为 `Some`。
+///
+/// 「固定 UTC+8」这一档是给出差的人用的：公司按北京的钟发工资，
+/// 人在东京也该「北京 9 点上班」。它不是唯一一档——默认仍然是跟随系统时区，
+/// 只有真的跨了 2 小时以上才会被问一次（见 `tz_check`）。
 const EAST8_SEC: i32 = 8 * 3600;
 
 /// 按配置取「墙上时钟」。
@@ -1342,6 +1388,45 @@ fn place_default(win: &tauri::WebviewWindow) {
     place_on(win, None);
 }
 
+/// 按相对坐标把窗口摆到主屏上，返回落位后的**逻辑**坐标。
+///
+/// `rx / ry` 取 0~1：0 贴左边/上边，1 贴右边/下边，两头各留 24px 边距。
+/// 引导第 3 步拖那张示意图得到的就是这个比例——那块示意区是 520×132，
+/// 和真实屏幕比例毫无关系，所以比例只能在窗口这边折算成像素。
+///
+/// 返回逻辑坐标是为了跟 `Settings.win` 的口径一致：`remember_pos` 存的也是
+/// 逻辑像素（物理值除以该屏 scale）。混两种口径，高 DPI 屏上下次启动会跳位。
+pub(crate) fn place_by_rel(
+    win: &tauri::WebviewWindow,
+    rx: f64,
+    ry: f64,
+) -> Option<crate::settings::WinPos> {
+    let mon = win.primary_monitor().ok().flatten()?;
+    let scale = mon.scale_factor();
+    let origin = mon.position();
+    let screen = mon.size();
+    let size = win.outer_size().ok()?;
+    let margin = (24.0 * scale) as i32;
+
+    // 可用挪动范围要减掉窗口自身和两侧边距，否则 rx=1 时窗口会有一半探出去
+    let free_x = (screen.width as i32 - size.width as i32 - margin * 2).max(0);
+    let free_y = (screen.height as i32 - size.height as i32 - margin * 2).max(0);
+
+    let rx = if rx.is_finite() { rx.clamp(0.0, 1.0) } else { 1.0 };
+    let ry = if ry.is_finite() { ry.clamp(0.0, 1.0) } else { 1.0 };
+
+    let x = origin.x + margin + (rx * free_x as f64).round() as i32;
+    let y = origin.y + margin + (ry * free_y as f64).round() as i32;
+
+    let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
+
+    let s = if scale > 0.0 { scale } else { 1.0 };
+    Some(crate::settings::WinPos {
+        x: (x as f64 / s).round() as i32,
+        y: (y as f64 / s).round() as i32,
+    })
+}
+
 /// 「固定在主屏」用：主屏的右上角。
 ///
 /// 跟 `place_default` 的差别只在「哪块屏」——不这么分，接着
@@ -1531,6 +1616,136 @@ fn spawn_snapper(app: tauri::AppHandle) {
             }
         })
         .ok();
+}
+
+/// 托盘看板：每秒把最新快照写到托盘提示上，顺带看一眼时区。
+///
+/// ## 为什么不挂在前端 `tick` 上
+///
+/// `tick` 是悬浮窗里的 JS 在调。窗口一藏起来，WebView 的定时器就会被系统降频
+/// （后台标签页的节流在桌面端同样生效），而「窗口藏起来、只看托盘」恰好是
+/// 托盘提示唯一有用的场景——它要是在那个场景下不更新，这个功能就等于没有。
+/// 托盘是这套程序里唯一不依赖窗口的东西，就别让它去依赖窗口的 JS。
+///
+/// ## 为什么是 1 秒
+///
+/// 提示里的金额保留两位，¥49/时的薪水大约 1.5 秒跳一分；1 秒的节拍已经比数字
+/// 本身的变化更快，再密只是白拿 CPU。时区也顺路在这一拍里查——它一天才变一次，
+/// 但只有在跑着的时候查得到。
+fn spawn_beacon(app: tauri::AppHandle) {
+    std::thread::Builder::new()
+        .name("paypulse-beacon".into())
+        .spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_millis(1_000));
+            let st = app.state::<AppState>();
+            let s = st.settings();
+            let now = clock(&s);
+            let snap = snapshot_at(now, &s);
+            tz_check(&app, &s);
+            let h = app.clone();
+            // 托盘 API 归主线程管：从这条线程直接调，轻则被忽略、重则把
+            // Windows 的消息循环拧在一起，所以统一甩回主线程执行。
+            let _ = app.run_on_main_thread(move || tray::sync_hint(&h, &snap));
+        })
+        .ok();
+}
+
+/// 时区判断的结论。
+///
+/// 抽成枚举是为了能被测试：`tz_check` 本身要 AppHandle，单测里造不出来，
+/// 但「差多少小时才该问」这条边界正是最该被钉住的东西。
+#[derive(Debug, PartialEq, Eq)]
+enum TzAct {
+    /// 什么都不用做（偏移没变）
+    Nothing,
+    /// 静默把基准更新成现在这个偏移
+    Remember,
+    /// 停下来问一次
+    Ask,
+}
+
+/// 纯判断，不碰任何全局状态。
+fn tz_decide(prev: Option<i32>, now: i32, fixed: bool) -> TzAct {
+    let Some(prev) = prev else {
+        // 首次运行：只记不问。
+        return TzAct::Remember;
+    };
+    if prev == now {
+        return TzAct::Nothing;
+    }
+    // 差不到 2 小时（夏令时、+5:30 这类微调），或者用户已经选了「固定 UTC+8」
+    // （那一档根本不读本地时区），都不值得打断。
+    if (now - prev).abs() < 2 * 3600 || fixed {
+        return TzAct::Remember;
+    }
+    TzAct::Ask
+}
+
+/// 时区变了的应对。规格 02-B：变更超过 2 小时就弹窗问「按哪边算」，一次确认。
+///
+/// 四种走法见 `tz_decide`。这里只负责「按结论执行」，以及一条执行期的细节：
+/// 窗口已经弹着就别再弹（1 秒一拍，不判这个会一秒一弹）。
+fn tz_check(app: &tauri::AppHandle, s: &Settings) {
+    let off = Local::now().offset().local_minus_utc();
+    // 首启**一个字段都不写**。这条判断不是洁癖：`fresh` 的判据就是
+    // 「settings.json 还不存在」（见 setup 里那行），这里若顺手记一笔时区，
+    // 文件就被创建了——用户这次关掉引导没填工资，下次启动会被当成老用户：
+    // 不弹引导，直接看到一个按 8000 块示例算出来的金额。
+    // 引导第 4 步落盘之后再记，那时写盘本来就是对的。
+    if app.state::<AppState>().is_fresh() {
+        return;
+    }
+    match tz_decide(s.tz_off, off, s.tz_fixed) {
+        TzAct::Nothing => {}
+        TzAct::Remember => tz_remember(app, off),
+        TzAct::Ask => {
+            if ask_win::is_open(app) {
+                return;
+            }
+            let prev = s.tz_off.unwrap_or(off);
+            log::w(&format!(
+                "检测到时区变化：{} → {}，停一次问用户按哪边算",
+                tz_label(prev),
+                tz_label(off)
+            ));
+            ask_win::ask(app, prev, off);
+        }
+    }
+}
+
+/// 记下「这台机器当前时区」，下次拿它当基准。
+fn tz_remember(app: &tauri::AppHandle, off: i32) {
+    app.state::<AppState>().mutate(|x| x.tz_off = Some(off));
+}
+
+/// 秒偏移 → `UTC+8` / `UTC+5:30`。负偏移写 `UTC-3`。
+pub(crate) fn tz_label(off_sec: i32) -> String {
+    let sign = if off_sec < 0 { '-' } else { '+' };
+    let m = off_sec.abs() / 60;
+    let (h, mi) = (m / 60, m % 60);
+    if mi == 0 {
+        format!("UTC{sign}{h}")
+    } else {
+        format!("UTC{sign}{h}:{mi:02}")
+    }
+}
+
+/// 系统当前的 UTC 偏移（秒）。东八区是 `28800`。
+///
+/// 单独抽一行是因为它有两个用途：一是判断时区变没变，二是「记下这个偏移」
+/// 这条写盘路径。两处都必须读同一个数，否则「检测到 +9、记成 +8」这种事
+/// 会让窗口每秒弹一次。
+pub(crate) fn local_offset_sec() -> i32 {
+    Local::now().offset().local_minus_utc()
+}
+
+/// 让已经开着的设置窗口重新拉一次配置。
+///
+/// 场景很具体：时区询问窗改了 `tz_fixed`，而设置窗口这会儿可能正开着，
+/// 上面那个「时区策略」下拉还停在旧值。不刷的话，用户会看到「设置里写着跟随系统、
+/// 实际已经按 UTC+8 算」——两个界面各说各话，比不做这个功能更糟。
+pub(crate) fn refresh_settings_view(app: &tauri::AppHandle) {
+    let _ = app.emit_to(settings_win::LABEL, "settings-changed", ());
 }
 
 /// 吸附正在改位置 → 别再处理它自己引发的那次 `Moved`。
@@ -1863,12 +2078,46 @@ pub fn run() {
             // 不预热的话那一帧就是白的。先建好藏着，open 只 show。
             settings_win::prewarm(app.handle());
 
-            // 第一次启动：直接把设置页推出来，悬浮窗继续藏着。
+            // 引导窗口同理。它在原型里是 560×640 的四步向导，只在首启弹一次，
+            // 但预热不设条件：等 `setup()` 判断出 fresh 再建就晚了，第一帧是空白。
+            onboard_win::prewarm(app.handle());
+
+            // 时区询问窗：出差落地、开机、发现时区跨了 2 小时才用得上，
+            // 一年可能一次都没有——但它出现的那一刻正是最不能白的一刻。
+            ask_win::prewarm(app.handle());
+
+            // 托盘看板：每秒把「今日已赚」写到托盘提示上，顺带看时区变没变。
+            spawn_beacon(app.handle().clone());
+
+            // 第一次启动：推开**四步引导**（不是设置页），悬浮窗继续藏着。
+            //
             // 判据是「配置文件当时不存在」，所以升级上来的老用户不会被弹一次。
             // 用户若把这扇窗口关掉而没填，下次启动会再来一次——这是有意的：
-            // 数据没落盘就等于没设置过。
+            // 数据没落盘就等于没设置过。悬浮窗的露脸绑在第一次写盘上
+            // （`apply_settings` 末尾的 `take_fresh()`），所以引导页里改来改去
+            // 不会提前把它叫出来。
             if fresh {
-                let _ = open_settings(app.handle());
+                let _ = onboard_win::open(app.handle());
+            }
+
+            // 调试用：`PAYPULSE_ONBOARD=1` 启动时直接拉起引导窗口。
+            // 非交互桌面上点不到托盘，首启又只发生一次，没有这个钩子就没法截图验版式。
+            #[cfg(debug_assertions)]
+            if std::env::var("PAYPULSE_ONBOARD").is_ok() {
+                let _ = onboard_win::open(app.handle());
+            }
+
+            // 调试用：`PAYPULSE_ASK=1` 直接拉起「时区变了」询问窗。
+            //
+            // 复现它本来要靠改系统时区：谁也不会为了验版式去把机器调到东京。
+            // 这里把「上次」当成真实偏移、「现在」当成 +1 小时——也就是一次东飞落地，
+            // 页面上的四个时刻全部照真实算法算出来（当地 09:00 = 北京 08:00 …），
+            // 不是写死的假数据。真实触发阈值仍是 2 小时（见 `tz_decide`），
+            // 这条钩子只是绕开阈值把窗口叫出来。
+            #[cfg(debug_assertions)]
+            if std::env::var("PAYPULSE_ASK").is_ok() {
+                let here = local_offset_sec();
+                ask_win::ask(app.handle(), here, here + 3600);
             }
 
             // 调试用：`PAYPULSE_SETTINGS=1` 启动时直接把设置窗口拉起来。
@@ -1961,6 +2210,8 @@ pub fn run() {
             settings_win::get_settings,
             settings_win::apply_settings,
             first_run,
+            ask_win::ask_pull,
+            ask_win::ask_answer,
             update::check_update,
             toast::toast_dismiss,
             toast::toast_pull
@@ -2741,5 +2992,74 @@ mod tests {
         assert!(!end_notice_due("on", true, 0, false));
         // 06:00 刚下班，今天凌晨那段是干过的
         assert!(end_notice_due("on", true, 21_600, false));
+    }
+
+    /// 时区判断的边界：2 小时是「问不问」的分水岭，方向两边都要对。
+    ///
+    /// 这条边界错一边的后果不一样：
+    ///   问太勤（把 1 小时也算进来）——夏令时地区一年被弹两次，用户会去关掉它；
+    ///   问太懒（把 2 小时漏掉）——在东京按北京的钟算了一整天，账是错的还看不出来。
+    #[test]
+    fn timezone_asks_only_past_two_hours() {
+        let east8 = 8 * 3600;
+        // 东飞 2 小时（北京 → 东京是 1 小时，这里按 2 小时边界测）
+        assert_eq!(tz_decide(Some(east8), east8 + 7200, false), TzAct::Ask);
+        // 西飞 2 小时
+        assert_eq!(tz_decide(Some(east8), east8 - 7200, false), TzAct::Ask);
+
+        // 差 1 小时（夏令时）：静默跟，不打扰
+        assert_eq!(
+            tz_decide(Some(east8), east8 + 3600, false),
+            TzAct::Remember
+        );
+        // 差 1 小时 59 分：还不够
+        assert_eq!(
+            tz_decide(Some(east8), east8 + 7140, false),
+            TzAct::Remember
+        );
+
+        // 没变：什么都不做（不能每拍都写一次盘）
+        assert_eq!(tz_decide(Some(east8), east8, false), TzAct::Nothing);
+
+        // 首次运行：只记不问
+        assert_eq!(tz_decide(None, east8, false), TzAct::Remember);
+
+        // 已经固定 UTC+8：本地时区怎么变都不问，那一档不读本地钟
+        assert_eq!(
+            tz_decide(Some(east8), 9 * 3600, true),
+            TzAct::Remember
+        );
+    }
+
+    /// 托盘提示：正常给钱，剩下三种情况只说状态。
+    ///
+    /// 「隐藏金额」是给开会投屏用的。托盘从背后把数字漏出来，等于开关是假的——
+    /// 而这恰恰是用户最不能容忍的一种「没生效」。
+    #[test]
+    fn tray_hint_never_leaks_the_amount_when_hidden() {
+        let s = Settings::default();
+        let normal = snap_with(at(10, 0), &s);
+        assert_eq!(normal.state, "on", "10:00 应该还在岗");
+        let hint = tray_hint(&normal);
+        assert!(
+            hint.starts_with("牛马薪动了！ 今日已赚 ¥"),
+            "正常状态要给钱，实际是 {hint}"
+        );
+        // mac 菜单栏那一路：有数就是钱，不带品牌词
+        assert!(tray_title(&normal).starts_with('¥'));
+
+        let mut hidden = Settings::default();
+        hidden.hide_money = true;
+        assert_eq!(tray_hint(&snap_with(at(10, 0), &hidden)), "牛马薪动了！");
+        assert_eq!(tray_title(&snap_with(at(10, 0), &hidden)), "¥");
+
+        // 休息日：不给数字
+        let mut weekend = Settings::default();
+        weekend.week.days = [false; 7];
+        let r = snap_with(at(10, 0), &weekend);
+        assert!(r.rest, "全周不上班应该是休息态");
+        assert_eq!(tray_hint(&r), "牛马薪动了！ 今天休息");
+        // 休息时菜单栏退成一个 `¥`：位置不能空着，否则菜单栏会跳
+        assert_eq!(tray_title(&r), "¥");
     }
 }

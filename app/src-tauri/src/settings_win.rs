@@ -484,6 +484,16 @@ pub struct Patch {
     /// 前端负责「输入 DELETE 才放行」那一关，后端不做二次确认——
     /// 但后端也不接受空字符串，避免一个手滑的 `clear: ""` 把数据清光。
     clear: Option<String>,
+
+    /// 引导第 3 步拖出来的位置，取值 0~1 的**相对坐标**。
+    ///
+    /// 为什么不收像素：那块「桌面示意区」是 520×132，和真实屏幕比例毫无关系，
+    /// 前端按自己的像素算出来必然错。后端手上就有工作区和窗口尺寸，
+    /// 折算这一步放在这里才是唯一算得准的地方。
+    ///
+    /// 只有用户真的拖动过才会带这个字段——没拖过就不传，悬浮窗保持默认的
+    /// 右下角（第 4 步那句「已经在桌面右下角待命」才不会变成假话）。
+    win_rel: Option<[f64; 2]>,
 }
 
 /// 「加一天 / 删一天」。节假日和调休补班共用。
@@ -860,7 +870,22 @@ pub fn apply_settings(app: AppHandle, patch: Patch) -> SettingsView {
     // 「今天」应该还是原来那个今天。
     let today = crate::clock(&st.settings()).date_naive();
 
-    st.mutate(|s| merge(s, &patch, today));
+    // 引导页拖出来的位置：先把相对坐标折算成像素（这一步要窗口和屏幕，
+    // 进不了 `merge` 那个只认 `Settings` 的闭包），再和别的字段一起写盘。
+    // 顺带把悬浮窗当场挪过去——它这会儿还没露脸，挪了不会闪一下。
+    let new_pos = patch
+        .win_rel
+        .and_then(|rel| {
+            let win = app.get_webview_window(crate::HUD_LABEL)?;
+            crate::place_by_rel(&win, rel[0], rel[1])
+        });
+
+    st.mutate(|s| {
+        merge(s, &patch, today);
+        if let Some(p) = new_pos {
+            s.win = Some(p);
+        }
+    });
 
     // 尺寸改了要立刻改悬浮窗宽度：等下一帧的话，中间那帧窗口比内容宽，
     // 多出来的透明区域会吃掉桌面上的一次点击。
