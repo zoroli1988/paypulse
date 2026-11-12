@@ -64,6 +64,29 @@ die()   { printf "%s[错误]%s %s\n" "$C_RED" "$C_RST" "$*" >&2; exit 1; }
 command -v curl >/dev/null 2>&1 || die "未找到 curl，请先安装。"
 command -v git  >/dev/null 2>&1 || die "未找到 git，请先安装。"
 
+# ---- 网络代理 ----
+# git for Windows 用 schannel 做 TLS，**不读** http_proxy/https_proxy 环境变量，
+# 必须用 `-c http.proxy` 显式传。不传的话国内网络下 github.com 会直接
+# 「schannel: failed to receive handshake, SSL/TLS connection failed」，
+# 而 `ls-remote` 有时又能过，表现成随机的「偶发失败」。
+#
+# 取值的优先级：GIT_PROXY > HTTPS_PROXY > https_proxy > 直连。
+# 不自动去读注册表里的系统代理——那需要额外调用外部程序，在有安全策略的
+# 机器上会被拦，脚本不该因为探测代理而挂掉。
+#
+# 本机（Clash / V2Ray 类）通常是 http://127.0.0.1:7890，显式指定即可：
+#   GIT_PROXY=http://127.0.0.1:7890 bash publish.sh push
+# 强制直连：GIT_PROXY= bash publish.sh push
+GIT_PROXY="${GIT_PROXY-${HTTPS_PROXY:-${https_proxy:-}}}"
+
+git_net() {
+  if [[ -n "$GIT_PROXY" ]]; then
+    git -c "http.proxy=$GIT_PROXY" -c "https.proxy=$GIT_PROXY" "$@"
+  else
+    git "$@"
+  fi
+}
+
 # revoke-help / gen-key 不需要 token；其余子命令及默认 push 都需要。
 CMD_PRE="${1:-push}"
 case "$CMD_PRE" in
@@ -200,7 +223,13 @@ push_repo() {
   fi
 
   info "$repo: 推送到 origin $br ..."
-  git push -u origin "$br"
+  if ! git_net push -u origin "$br"; then
+    rm -f "$token_helper"
+    if [[ -z "$GIT_PROXY" ]]; then
+      die "$repo: 推送失败。若报 'schannel: failed to receive handshake'，\n  说明直连 github.com 被拦，请指定代理：\n  GIT_PROXY=http://127.0.0.1:7890 bash publish.sh push"
+    fi
+    die "$repo: 推送失败（当前代理：$GIT_PROXY）。检查代理是否可用，或用 GIT_PROXY= 强制直连。"
+  fi
   ok "$repo: 推送完成"
 
   # 清理一次性 askpass（token 不留盘）
@@ -350,7 +379,7 @@ cmd_release() {
   token_helper="$(mktemp)"
   printf '#!/bin/sh\necho "%s"\n' "$TOKEN" > "$token_helper"
   chmod +x "$token_helper"
-  GIT_ASKPASS="$token_helper" git push origin "$tag" 2>&1 || {
+  GIT_ASKPASS="$token_helper" git_net push origin "$tag" 2>&1 || {
     warn "git push tag 走 schannel 可能偶发失败（TLS 不稳）。"
     warn "改用 GitHub API 打 tag（Git Data API 稳定）："
     create_tag_via_api "$tag"
