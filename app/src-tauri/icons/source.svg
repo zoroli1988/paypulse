@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <!-- 牛马薪动了 · 应用图标源文件（方案 A：正脸牛头，一只眼是金币）
+       这是唯一源；所有尺寸由 `npx @tauri-apps/cli icon src-tauri/icons/source.svg` 生成。
+       改色只改这里，不要改导出的 PNG。 -->
+  <rect width="512" height="512" rx="112" fill="#0B0E13"/>
+  <rect x="6" y="6" width="500" height="500" rx="108" fill="none" stroke="rgba(255,255,255,.06)" stroke-width="3"/>
+  <path d="M176 196 Q 176 156 214 148 L 298 148 Q 336 156 336 196 L 336 300 Q 336 372 256 400 Q 176 372 176 300 Z"
+        fill="rgba(53,224,127,.07)" stroke="#35E07F" stroke-width="17" stroke-linejoin="round"/>
+  <path d="M180 186 Q 128 156 106 106 Q 158 116 194 152" fill="rgba(53,224,127,.07)" stroke="#35E07F" stroke-width="17" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M332 186 Q 384 156 406 106 Q 354 116 318 152" fill="rgba(53,224,127,.07)" stroke="#35E07F" stroke-width="17" stroke-linecap="round" stroke-linejoin="round"/>
+  <ellipse cx="206" cy="248" rx="19" ry="22" fill="none" stroke="#35E07F" stroke-width="13"/>
+  <circle cx="308" cy="248" r="42" fill="#FFB020"/>
+  <circle cx="308" cy="248" r="42" fill="none" stroke="#FFD98A" stroke-width="6" opacity=".55"/>
+  <g stroke="#0B0E13" stroke-width="11" stroke-linecap="round" fill="none">
+    <path d="M292 226 L308 244 L324 226"/>
+    <path d="M308 244 L308 268"/>
+    <path d="M293 250 L323 250"/>
+    <path d="M293 262 L323 262"/>
+  </g>
+  <ellipse cx="232" cy="330" rx="12" ry="9" fill="#35E07F" opacity=".55"/>
+  <ellipse cx="280" cy="330" rx="12" ry="9" fill="#35E07F" opacity=".55"/>
+</svg>
