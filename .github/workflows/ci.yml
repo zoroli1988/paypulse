@@ -73,6 +73,78 @@ jobs:
           cd app/src-tauri && cargo build
 
   # ------------------------------------------------------------------
+  # 发布路径编译（Windows MSVC，单文件）。
+  #
+  # 跑的是 release.yml 里那条一模一样的命令。目的不是产物，是「发版那条路
+  # 还活着」：GNU 编得出来不代表 MSVC 编得出来——链接器、rc.exe、CRT 静态库、
+  # +crt-static 全是另一套（见 installer/msvc-env.sh）。这条路如果只在打 tag
+  # 那天才被验证，等于没有 CI：标签已经推出去了，用户已经下到一个装不上的包。
+  #
+  # 两个 windows job 并行跑，互不阻塞。runner 上自带 Visual Studio，
+  # msvc-env.sh 会用 vswhere 认出它，不下载任何东西。
+  # ------------------------------------------------------------------
+  release-windows:
+    name: 发布路径编译（Windows MSVC 单文件）
+    runs-on: windows-latest
+    needs: clock
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.PAYPULSE_CORE_PAT }}
+
+      - name: 检查私有引擎是否就位
+        id: core
+        run: |
+          if (Test-Path "paypulse-core/src/lib.rs") {
+            Write-Output "present=true" >> $env:GITHUB_OUTPUT
+          } else {
+            Write-Output "present=false" >> $env:GITHUB_OUTPUT
+          }
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.core.outputs.present == 'true'
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - uses: actions/setup-python@v5
+        if: steps.core.outputs.present == 'true'
+        with:
+          python-version: '3.12'
+
+      # 全量编一次约 8 分钟，命中缓存后 1~2 分钟（LTO fat + codegen-units=1，
+      # 这两个 crate 的依赖树一样重）。想少一个第三方 action 就删掉这三行，
+      # 只是慢，不影响正确性。
+      - uses: Swatinem/rust-cache@v2
+        if: steps.core.outputs.present == 'true'
+        with:
+          # 主程序和安装器是两个独立的 target 目录，两个都得缓存
+          workspaces: |
+            app/src-tauri -> target
+            installer -> target
+
+      - name: 编译单文件安装包
+        if: steps.core.outputs.present == 'true'
+        shell: bash
+        run: bash installer/build.sh --app --msvc
+
+      # 和 release.yml 同一道护栏：单文件是产品承诺，不是构建细节
+      - name: 校验 dist 里只有一个 exe
+        if: steps.core.outputs.present == 'true'
+        shell: pwsh
+        run: |
+          $files = @(Get-ChildItem installer/dist -File)
+          $files | Format-Table Name, Length
+          if ($files.Count -ne 1) {
+            Write-Error "dist 里应该有且只有一个安装包，实际 $($files.Count) 个"
+            exit 1
+          }
+          if ($files[0].Extension -ne ".exe") {
+            Write-Error "dist 里那个文件不是 exe：$($files[0].Name)"
+            exit 1
+          }
+
+  # ------------------------------------------------------------------
   # 外壳编译（macOS）。
   # 目的：验证 macOS 平台层（platform.rs 的 #[cfg(target_os="macos")]
   # 分支）能编译。同样需要私有引擎，用 PAYPULSE_CORE_PAT 拉 submodule。

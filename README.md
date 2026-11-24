@@ -41,7 +41,17 @@ git clone --recurse-submodules git@github.com:zoroli1988/paypulse.git
 
 ## 快速开始
 
-详见 [`app/README.md`](app/README.md) 的第三节（构建环境、四个坑与解法）。Windows 用 `x86_64-pc-windows-gnu` 工具链，需要补 GNU binutils（`as` / `dlltool` / `windres` / `windmc`），README 已写清从 msys2 获取的步骤。
+详见 [`app/README.md`](app/README.md) 的第三节（构建环境、四个坑与解法）。
+
+日常开发用 `x86_64-pc-windows-gnu` 就行，需要补 GNU binutils（`as` / `dlltool` / `windres` / `windmc`），步骤见 app/README 3.1–3.2。
+
+**要打发布包（一个 exe，不带任何伴随文件）必须用 MSVC 目标**：
+
+```bash
+bash installer/build.sh --app --msvc     # → installer/dist/<名字>_<版本>_x64-setup.exe
+```
+
+原因是 `webview2-com-sys` 在 GNU 下只能动态链 `WebView2Loader.dll`，用户少拿一个文件就是「无法继续执行代码」——连我们的代码都还没跑到。工具链不用另装：`installer/msvc-env.sh` 会在用户目录里自备一套（约 470 MB，不要管理员权限），装了 Visual Studio 的机器直接复用。发布流水线（`.github/workflows/release.yml`）走的就是这条，并有一道「dist 里只能有一个 exe」的护栏。
 
 ## 平台支持
 

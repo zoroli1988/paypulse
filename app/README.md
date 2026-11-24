@@ -87,7 +87,31 @@ paypulse-prototype.html    高保真原型（设计稿，唯一视觉基准）
 
 对普通开发机来说这就是一句 `cargo build`。但**在只用 rustup 的机器上会连着踩三个坑**，这里记录解法，省下你半天。
 
-### 3.1 前置
+### 3.0 发版要「一个文件」→ 必须用 `--msvc`
+
+```bash
+bash installer/build.sh --app --msvc      # 交付物：installer/dist/ 下唯一的一个 exe
+```
+
+也就是说，**发布包不是用默认的 `windows-gnu` 工具链编出来的**。原因只有一个，在 `webview2-com-sys` 的源码里（`src/lib.rs:14-22`）：
+
+```rust
+#[cfg(target_env = "msvc")]
+#[link(name = "WebView2LoaderStatic", kind = "static")]   // 静态：loader 进 exe
+// ...
+#[cfg(not(target_env = "msvc"))]
+#[link(name = "WebView2Loader.dll")]                      // 动态：exe 旁边必须有个 dll
+```
+
+GNU 目标只能走动态那条，于是 exe 旁边必须躺着一个 160 KB 的 `WebView2Loader.dll`。少了它，Windows 加载器在**进入我们的代码之前**就弹「由于找不到 WebView2Loader.dll，无法继续执行代码」——所以在程序里兜不住，只能靠工具链选对。
+
+这台机器上没装 Visual Studio 也编得出来：`installer/msvc-env.sh` 用 rustup 的 `rust-std`(msvc) + 自带的 `rust-lld`（复制一份改名 `lld-link.exe`）+ NuGet 的 `Microsoft.Windows.SDK.CPP.x64` 导入库 + xwin 解出的 CRT 静态库 + NuGet 的 `rc.exe`，凑成一套**全在用户目录里**的工具链（`%LOCALAPPDATA%\paypulse-msvc`，约 470 MB）。不需要管理员权限，不写系统目录。装了 VS 的机器（比如 CI 的 `windows-latest`）它用 `vswhere` 认出来，直接用，一个字节都不下载。
+
+两条路都带 `+crt-static`：产物连 `vcruntime140.dll` 都不依赖，所以在一台什么运行时都没装过的机器上双击也能跑。这个 flag 通过 `CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS` 传，而不是 `RUSTFLAGS`——后者会一并套到构建脚本和过程宏上（它们按 host 编）。
+
+默认的 GNU 那条路留着给日常开发和 `cargo test` 用，产物需要伴生 dll，`build.sh` 会把它一起拷进 `dist/`。**发布包不能用它。**
+
+### 3.1 前置（GNU 路径）
 
 ```bash
 rustup target add x86_64-pc-windows-gnu
@@ -190,28 +214,51 @@ process didn't exit successfully: ... (exit code: 0xc0000139, STATUS_ENTRYPOINT_
 
 ### 3.6 出安装包
 
+**发版用的安装包不是 NSIS，是仓根 `installer/` 那个自制安装器**（方案 8.2 的方案 B）。一条命令做完三件事：编主程序 → 压成 payload → 编安装器。
+
 ```bash
-cd app
-npm install          # 只装 @tauri-apps/cli，这是个零运行依赖的项目
-npm run build        # = tauri build，产 NSIS 安装包
-npm run build:no-bundle   # 只出 exe，不打包（本地自测用，快得多）
+bash installer/build.sh --app --msvc   # 从零：先编 exe，再打安装包（发版用这个，单文件）
+bash installer/build.sh --msvc         # 只重打安装包（复用上次的 exe）
 ```
 
-首次 `build` 会联网下载两样东西：`@tauri-apps/cli` 和 NSIS 本体（落在 Tauri 自己的缓存目录，不在仓里）。离线机器请用 `build:no-bundle` 出裸 exe。
+`--msvc` 见 3.0：去掉它就走 GNU，`dist/` 里会多一个必须一起发出去的 `WebView2Loader.dll`。CI（`.github/workflows/release.yml`）跑的就是带 `--msvc` 的这条，并且额外有一道「`dist/` 里有且只有一个 exe」的护栏——本机和流水线只有这一处入口。
 
-产物在 `src-tauri/target/x86_64-pc-windows-gnu/release/bundle/nsis/`。
+产物：`installer/dist/牛马薪动了_<版本>_x64-setup.exe`（一个文件，4.4 MB 左右）。
 
-**只打 NSIS，不打 MSI**：`bundle.targets` 写死成 `["nsis"]`。MSI 要走 WiX，那是另一套下载和另一套签名要求，而这个工具没有任何需要 MSI 的部署场景（无组策略分发、无域环境）。
+安装器自己的事写在 `installer/src/main.rs` 开头：为什么不用 NSIS（原生按钮上不了色、进度掌握在 INSTFILES 页手里，那套皮怎么刷都刷不出原型）、装到哪儿、payload 为什么压、`WebView2Loader.dll` 什么时候需要一起发。界面在 `installer/ui/index.html`，版式数字逐项抄自方案 8.2 的原型。
 
-**安装模式是 `currentUser`，不是 `perMachine`**，理由三条：
+三个跟「用户体验」有关、容易踩回去的点，也记在 `main.rs` 里：
+
+- **开机就要有反应。** Tauri 是「先把窗口连同 WebView2 建好，再调 `setup`」，而 WebView2 从起进程到能画第一帧要 3~19 秒（这台机器实测，波动来自 Defender 和磁盘）。所以 `main()` 里先用一块纯 Win32 的占位卡片抢在前面（150~270 ms 就能看到），WebView2 就绪后再交接给真窗口。**不要改回「等界面就绪才 show()」**——`setup` 里调 `show()` 要排在 WebView2 建完之后才执行，等于没改。
+- **只允许一个实例。** 现在露脸够快，用户不会因为「看起来没反应」而连点两次；万一还是点了，第二个进程会把第一个窗口提到前面然后自己退出，而不是两个同时往同一个目录写文件。
+- **WebView2 的数据目录在 `%TEMP%\paypulse-setup`**，退出时由 `--cleanup-webview` 那个副本删掉。放 `%LOCALAPPDATA%`（WebView2 默认按 identifier 建）会留下 113 MB、334 个文件，一次性安装器不该留这些东西。卸载时两个位置都会清。
+
+排查启动慢：设环境变量 `PAYPULSE_SETUP_TRACE=1` 再跑，`%TEMP%\paypulse-setup-trace.log` 里会记下「占位卡片显示 / setup 进入 / 装饰完成 / 真窗口接管 / 页面加载 / show_me」各自的毫秒。
+
+**给安装器加按钮时记住这一条**：Tauri v2 的 `core:default` **不包含** `start_dragging` 和 `close`。也就是说 `data-tauri-drag-region` 写的拖标题栏、`getCurrentWindow().close()` 写的关窗，在权限没显式列出时**点了完全没反应**——界面不报错，控制台也没痕迹，代码里那两行调用明明写着。要加就加在 `installer/capabilities/default.json` 的 `permissions` 里（`core:window:allow-start-dragging` / `core:window:allow-close`）。改完这个文件必须重编安装器——`installer/build.rs` 里已经把它挂进 `rerun-if-changed`，否则 ACL 是编译期嵌进二进制的，改了不重编等于没改。
+
+裸 exe 自测还是这三条：
+
+```bash
+cd app
+npm install               # 只装 @tauri-apps/cli，这是个零运行依赖的项目
+npm run build:no-bundle   # 只出 exe，不打包
+npm run build             # tauri build，仍会走 NSIS——但发版不再用它
+```
+
+`src-tauri/nsis/brand.nsi` 与 `tauri.conf.json` 里的 `bundle.nsis` 段是换方案前留下的，留着只是不想让 `npm run build` 直接坏掉，别再往里加东西。
+
+**安装位置是 `%LOCALAPPDATA%\牛马薪动了`，不是 `Program Files`**，理由三条：
 
 1. 自启写的是 `HKCU\...\Run`——那是「当前用户登录时启动」。装到 `Program Files` 而自启只对一个人生效，等于两套作用域错配：机器上另一个账户能看到它装着，但永远不会自启。
 2. 装 `Program Files` 每次升级都要过一次 UAC。一个常驻托盘的小工具，每次更新弹一次蓝色确认框，用户第三次就会去搜「怎么卸载」。
-3. 它装到 `%LOCALAPPDATA%\paypulse`，卸载不留管理员痕迹，也不需要管理员权限就能装。代价是同一台机器的其他 Windows 账户看不到它——对「我看着自己的工资」这个语义，这是对的。
+3. 单文件、只写自己目录，抬权没有任何收益，只会多一个 UAC 弹窗。代价是同一台机器的其他 Windows 账户看不到它——对「我看着自己的工资」这个语义，这是对的。
 
-这三个字段（`targets` / `installMode` / `icon`）是打包唯一需要人工判断的地方，其余都是默认值。改 `installMode` 请连带回看自启那条：注册表里存的是 `std::env::current_exe()` 当场读出来的绝对路径（`setup()` 里每次启动都重新对齐一次，就是因为换安装目录后那条旧路径会让下次开机启不起来——而用户不会知道为什么）。换安装位置这件事它自己扛得住，换**用户作用域**扛不住：老版本写在别人 `HKCU` 下的那条会被留在原地。
+界面上点「更改」可以换到别的盘（系统自己的 `IFileOpenDialog`，不是 XP 那个树），选到 `C:\Program Files` 会因为没权限报错——那时报错文字会直接告诉用户去点「更改」，而不是丢一句「拒绝访问」。
 
 #### 装一次，验一遍
+
+> 注意：下面这个脚本还是按 NSIS 写的（找 `bundle/nsis` 下的包、用 `/S` 静默装、验卸载向导那个「删除数据」勾选框）。换成自制安装器之后它跑不通了——自制安装器没有静默安装参数，卸载也不删数据。要用它得先改成「点界面上的安装 / 调 `--uninstall`」。攒在下一轮，别以为它现在是绿的。
 
 配置对不对，静态看不出来。`app/tools/verify-install/verify-install.ps1` 走完 装前 → 安装 → 装后 → 卸载 → 卸后 五步，每步抓一次系统状态（注册表、目录、快捷方式）再逐项核对：
 
