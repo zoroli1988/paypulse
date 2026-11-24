@@ -1,6 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "paypulse",
+  "productName": "牛马薪动了",
+  "mainBinaryName": "paypulse",
   "version": "0.1.7",
   "identifier": "com.bydota.paypulse",
   "build": {
@@ -42,7 +43,7 @@
     "publisher": "BYDOTA",
     "copyright": "Copyright © 2026 BYDOTA",
     "category": "Productivity",
-    "shortDescription": "实时薪资悬浮窗",
+    "shortDescription": "把月薪摊成每一秒",
     "longDescription": "把月薪摊成每一秒：金额每帧重算、绝不累加；双账隔离，计入月薪的和只记白干的永远分开。",
     "licenseFile": "../LICENSE",
   "resources": {
@@ -52,7 +53,10 @@
       "nsis": {
         "installMode": "currentUser",
         "languages": ["SimpChinese"],
-        "displayLanguageSelector": false
+        "displayLanguageSelector": false,
+        "template": "nsis/brand.nsi",
+        "installerIcon": "icons/icon.ico",
+        "sidebarImage": "nsis/sidebar.bmp"
       }
     }
   }

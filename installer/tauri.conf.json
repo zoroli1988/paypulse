@@ -1,0 +1,43 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "牛马薪动了安装程序",
+  "mainBinaryName": "paypulse-setup",
+  "version": "0.1.7",
+  "identifier": "com.bydota.paypulse.setup",
+  "build": {
+    "frontendDist": "ui"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "牛马薪动了 · 安装",
+        "width": 420,
+        "height": 300,
+        "resizable": false,
+        "decorations": false,
+        "transparent": false,
+        "shadow": true,
+        "center": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": false,
+        "visible": false,
+        "backgroundColor": "#0B0E13"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": false,
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/icon.ico"
+    ],
+    "publisher": "BYDOTA",
+    "copyright": "Copyright © 2026 BYDOTA"
+  }
+}

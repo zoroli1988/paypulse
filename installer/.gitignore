@@ -1,0 +1,10 @@
+/target
+/dist
+
+# payload 是构建产物：installer/build.sh 每次从 app/src-tauri/target/release
+# 拷一份最新的主程序过来。不进仓库——它是 AGPL 仓，不想让二进制混进历史里。
+/payload/paypulse.exe
+/payload/paypulse.lzma
+
+# tauri-build 生成的 JSON schema，随 Tauri 小版本变，没必要跟版本
+/gen/schemas

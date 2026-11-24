@@ -1,0 +1,521 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>牛马薪动了 · 安装</title>
+<style>
+/* ===================================================================
+   安装器界面 —— 严格按《0.2.0 改造方案》8.2 原型逐项还原。
+
+   原型的关键数字都写在这里，改动前先回方案核对：
+     卡片      420 宽 / #0B0E13 / 1px rgba(255,255,255,.11) / radius 14
+     标题栏    padding 10px 12px / #12161D / 底部 1px rgba(255,255,255,.06)
+               三颗 9px 圆点 #FF5F57 #FEBC2E #28C840，文字 11px rgba(255,255,255,.35)
+     内容区    padding 26px 26px 22px
+     品牌行    图标 38px，名称 15px/600，版本 11.5px rgba(255,255,255,.42)，gap 12，下距 20
+     说明      12.5px rgba(255,255,255,.62)，行高 1.7，下距 18
+     路径行    padding 10px 12px / rgba(255,255,255,.04) / radius 9 / 11.5px
+     按钮行    margin-top 22 / gap 10
+     安装按钮  flex 1 / #35E07F / 字色 #06240F / radius 10 / padding 11px 0 / 13px 600
+     取消按钮  宽 88 / rgba(255,255,255,.06) / 1px rgba(255,255,255,.1) / radius 10
+   =================================================================== */
+
+:root {
+  --bg: #0B0E13;
+  --bar: #12161D;
+  --green: #35E07F;
+  --green-dark: #06240F;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  width: 420px;
+  height: 100%;
+  /* 窗口本身已是不透明的 #0B0E13（见 tauri.conf），这里必须同色：
+     窗口比内容先出现的那一帧，露出的是 body 的底色，透明的话会闪一下白。 */
+  background: #0B0E13;
+  color: #E8ECF1;
+  font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  /* 圆角交给系统（DWM）做，见 main.rs 的 round_corners：
+     CSS 圆角只能让卡片内部变圆，窗口四角仍是方的，露出来就是四个直角。 */
+  user-select: none;
+}
+
+/* ---------------- 卡片：整窗就是这张卡片 ---------------- */
+.win {
+  width: 420px;
+  height: 100%;
+  background: var(--bg);
+  border: 1px solid rgba(255, 255, 255, .11);
+  border-radius: 14px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---------------- 标题栏 ---------------- */
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 10px 12px;
+  background: var(--bar);
+  border-bottom: 1px solid rgba(255, 255, 255, .06);
+  flex: none;
+  /* 整条都可拖动；按钮、圆点要挖掉，否则会变成「拖着窗口跑」 */
+  cursor: default;
+}
+.dots { display: flex; gap: 7px; }
+.dots i {
+  width: 9px; height: 9px;
+  border-radius: 50%;
+  display: block;
+}
+.dots i:nth-child(1) { background: #FF5F57; }
+.dots i:nth-child(2) { background: #FEBC2E; }
+.dots i:nth-child(3) { background: #28C840; }
+
+/* 三颗点是照原型画的装饰，但 Windows 上没有系统关闭按钮了，
+   所以红点兼作关闭：hover 时里面浮出一个 ×，不认识的人也不会误触。 */
+.dots .close {
+  cursor: pointer;
+  position: relative;
+  transition: filter .15s;
+}
+.dots .close:hover { filter: brightness(1.15); }
+.dots .close::after {
+  content: "×";
+  position: absolute;
+  inset: 0;
+  font-size: 9px;
+  line-height: 9px;
+  text-align: center;
+  color: rgba(0, 0, 0, .55);
+  font-weight: 700;
+  opacity: 0;
+  transition: opacity .12s;
+}
+.dots .close:hover::after { opacity: 1; }
+
+.bar .t {
+  font-size: 11px;
+  color: rgba(255, 255, 255, .35);
+  margin-left: 6px;
+}
+
+/* ---------------- 内容区 ---------------- */
+.body {
+  padding: 26px 26px 22px;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+/* 品牌行 */
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.brand svg { width: 38px; height: 38px; display: block; flex: none; }
+.brand .n { font-size: 15px; font-weight: 600; line-height: 1.3; }
+.brand .v {
+  font-size: 11.5px;
+  color: rgba(255, 255, 255, .42);
+  line-height: 1.4;
+  margin-top: 1px;
+}
+
+/* 说明 */
+.desc {
+  font-size: 12.5px;
+  color: rgba(255, 255, 255, .62);
+  line-height: 1.7;
+  /* 方案里是 18px。这里少 2px：菜单栏 36 + 内边距 + 两行说明 + 路径行 +
+     按钮行 + 上下 padding 正好 302，而 .win 的 height:100% 是 300（含
+     上下各 1px 边框，内容区 298），不扣掉这 2px 按钮底边会被裁掉一条。 */
+  margin-bottom: 16px;
+  /* 固定占两行的高度：装到一半这句话会变短（一行），
+     不锁高的话下面的路径行和按钮整排往上跳一次 */
+  min-height: 43px;
+}
+.desc em {
+  font-style: normal;
+  font-family: var(--mono);
+  font-weight: 600;
+  color: var(--green);
+}
+/* 安装中的第二行：当前在做哪一步。写「正在写入主程序」比只给个百分比有用——
+   2 MB 的包装起来不到 1 秒，光看数字根本不知道卡在哪儿。 */
+.desc small {
+  display: block;
+  font-size: 11.5px;
+  color: rgba(255, 255, 255, .38);
+  line-height: 1.6;
+}
+/* 安装失败：把说明行染红，按钮变「重试」。
+   原型没画这个状态，但真实安装会失败（主程序没退出、目录没权限），
+   一声不吭地停在 62% 比报错更糟。
+   限两行是为了不动版式：这一行多长出来一截，下面的路径行和按钮就整排下移，
+   卡片底部会切掉按钮——卡片高度是按原型算死的（见文件头的数字）。
+   完整报错挂在 title 上，长按/悬停能看到全文。 */
+.desc.err {
+  color: #FF8A8A;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* 路径行 */
+.path {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, .04);
+  border-radius: 9px;
+  font-size: 11.5px;
+  color: rgba(255, 255, 255, .45);
+}
+.path .p {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;      /* 路径太长时从尾部截，保留盘符和末级目录 */
+  text-align: left;
+}
+.path .p bdi { direction: ltr; unicode-bidi: bidi-override; }
+.path .chg {
+  color: rgba(255, 255, 255, .3);
+  cursor: pointer;
+  flex: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  transition: color .15s;
+}
+.path .chg:hover { color: var(--green); }
+
+/* ---------------- 按钮行 ---------------- */
+.acts {
+  display: flex;
+  gap: 10px;
+  margin-top: 22px;
+  flex: none;
+  height: 40px;        /* 固定高度：安装中要把它换成同尺寸的进度条，不能让它长高 */
+}
+
+.btn-primary {
+  flex: 1;
+  background: var(--green);
+  border: 0;
+  color: var(--green-dark);
+  border-radius: 10px;
+  padding: 11px 0;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background .15s, transform .08s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+}
+.btn-primary:hover { background: #45E98C; }
+.btn-primary:active { transform: translateY(1px); }
+
+.btn-ghost {
+  width: 88px;
+  background: rgba(255, 255, 255, .06);
+  border: 1px solid rgba(255, 255, 255, .1);
+  color: rgba(255, 255, 255, .6);
+  border-radius: 10px;
+  padding: 11px 0;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background .15s, color .15s, border-color .15s;
+  flex: none;
+}
+.btn-ghost:hover {
+  background: rgba(255, 255, 255, .1);
+  color: rgba(255, 255, 255, .85);
+  border-color: rgba(255, 255, 255, .18);
+}
+
+/* ---------------- 安装中：按钮原地变进度条 ---------------- */
+/* 占的格子必须和「安装」按钮完全一样（flex 1 / 高 40 / radius 10），
+   否则按下去的瞬间底栏会跳一下——这正是原型强调「同位置」的意思。 */
+.bar-wrap {
+  flex: 1;
+  position: relative;
+  height: 40px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, .07);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  --p: 0;
+}
+/* 百分比不放在条上：数字一旦横跨「绿/灰」交界，无论怎么裁都会把字劈开
+   （实测 62% 时「%」整个消失）。改到上面的说明行里，一行字，颜色统一。 */
+.bar-wrap i {
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: calc(var(--p) * 1%);
+  background: var(--green);
+  transition: width .18s linear;
+}
+
+/* ---------------- 三态切换 ---------------- */
+/* 安装中只藏「安装」按钮本身；「取消」要留着——这时候正是最该能反悔的时刻 */
+[data-state="busy"] .btn-primary { display: none; }
+[data-state="busy"] .bar-wrap { display: flex; }
+
+[data-state="idle"] .bar-wrap,
+[data-state="done"] .bar-wrap { display: none; }
+
+[data-state="busy"] .path .chg { opacity: .35; pointer-events: none; }
+[data-state="busy"] .desc { color: rgba(255, 255, 255, .45); }
+
+/* 装完后提示语换一句，别让「开始使用」孤零零挂着 */
+.donehint {
+  display: none;
+  font-size: 12.5px;
+  color: var(--green);
+  line-height: 1.7;
+  margin-bottom: 18px;
+  min-height: 43px;   /* 和 .desc 同一个槽位，done 态下按钮不位移 */
+}
+[data-state="done"] .donehint { display: block; }
+[data-state="done"] .desc { display: none; }
+/* 装完了还改安装路径没有意义，藏掉；「取消」此时语义也变了，改叫关闭 */
+[data-state="done"] .path .chg { visibility: hidden; }
+</style>
+</head>
+
+<body>
+<div class="win" id="win" data-state="idle">
+
+  <div class="bar" data-tauri-drag-region id="bar">
+    <div class="dots">
+      <i class="close" id="btnClose" title="关闭"></i>
+      <i></i>
+      <i></i>
+    </div>
+    <span class="t" data-tauri-drag-region>牛马薪动了 · 安装</span>
+  </div>
+
+  <div class="body">
+    <div class="brand">
+      <!-- 方案 A 图标原样内联，保证安装器和主程序、托盘是同一个形象 -->
+      <svg viewBox="0 0 512 512" aria-hidden="true">
+        <rect width="512" height="512" rx="112" fill="#0B0E13"/>
+        <path d="M176 196 Q 176 156 214 148 L 298 148 Q 336 156 336 196 L 336 300 Q 336 372 256 400 Q 176 372 176 300 Z"
+              fill="rgba(53,224,127,.07)" stroke="#35E07F" stroke-width="20" stroke-linejoin="round"/>
+        <path d="M180 186 Q 128 156 106 106 Q 158 116 194 152" fill="none" stroke="#35E07F" stroke-width="20" stroke-linecap="round"/>
+        <path d="M332 186 Q 384 156 406 106 Q 354 116 318 152" fill="none" stroke="#35E07F" stroke-width="20" stroke-linecap="round"/>
+        <circle cx="308" cy="248" r="42" fill="#FFB020"/>
+      </svg>
+      <div>
+        <div class="n">牛马薪动了</div>
+      </div>
+    </div>
+
+    <div class="desc" id="desc">
+      让薪酬动起来，为枯燥的牛马工提供另类的情绪价值。<br>
+      养个老板当宠物，向他汇报当投喂。被骂就抽打，以牙还牙。
+    </div>
+
+    <div class="donehint">装好了。点「开始使用」直接开始设置。</div>
+
+    <div class="path">
+      <span class="p"><bdi id="pathText">C:\Users\你\AppData\Local\牛马薪动了</bdi></span>
+      <button class="chg" id="btnChg" type="button">更改</button>
+    </div>
+
+    <div class="acts">
+      <button class="btn-primary" id="btnGo" type="button">安装</button>
+      <div class="bar-wrap" id="barWrap">
+        <i id="barFill"></i>
+      </div>
+      <button class="btn-ghost" id="btnCancel" type="button">取消</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// 这一版是纯界面稿：三个状态靠 window.__set() 切换，方便截图核对。
+// 接 Tauri 之后，__set 由后端的 install://progress 事件驱动。
+(function () {
+  var win = document.getElementById("win");
+  var btnGo = document.getElementById("btnGo");
+  var btnCancel = document.getElementById("btnCancel");
+  var btnClose = document.getElementById("btnClose");
+  var barWrap = document.getElementById("barWrap");
+  var desc = document.getElementById("desc");
+  var pathText = document.getElementById("pathText");
+
+  // 装哪儿：defPath 是后端给的默认目录，chosen 是用户在「更改」里选过的。
+  // 路径一律原样回传给后端——去尾分隔符、盘根补目录名这些规则只在 Rust 里写一份。
+  var defPath = "";
+  var chosen = "";
+  function currentDir() { return chosen || defPath; }
+
+  // 空闲态那句话只在 html 里写一份，这里记住它的原始内容。
+  // 别再回来写成 JS 字符串常量：之前就是这么干的，改文案时改了 JS 忘了
+  // 上面那行静态文本，首屏画出来是旧句子，装完一轮才发现——两处文案必然
+  // drift，干脆只留 DOM 一处。
+  var DESC_IDLE = desc.innerHTML;
+
+  // 在浏览器里直接打开这个文件时没有 Tauri 运行时，这时退化成纯界面稿，
+  // 方便截图核对版式（tmp/shot-installer.py 就是这么用的）。
+  var T = window.__TAURI__ || null;
+  var invoke = T ? T.core.invoke : null;
+
+  // 窗口在 tauri.conf 里是 visible:false，等下面那两件异步的事回齐了才显形
+  // （见文件末尾），这样第一眼就是最终样子。
+  //
+  // 这里踩过一个坑，别再改回去：不能用 requestAnimationFrame 当「画完了」的
+  // 信号。窗口隐藏时 Chromium 不跑合成，rAF 一次都不会回调，结果全靠兜底
+  // 的定时器——实测就卡满 3 秒，观感是「双击了没反应」，其实是早就加载完了。
+  var revealed = false;
+  function reveal() {
+    if (revealed) return;
+    revealed = true;
+    if (invoke) invoke("show_me").catch(function () {});
+  }
+  // 兜底：上面任何一步卡住，窗口也不能永远不出来
+  setTimeout(reveal, 1500);
+
+  window.__set = function (state, pct, step) {
+    win.dataset.state = state;
+    desc.classList.remove("err");
+    desc.title = "";
+
+    if (typeof pct === "number") {
+      var v = Math.max(0, Math.min(100, pct));
+      barWrap.style.setProperty("--p", v);
+      if (state === "busy") {
+        desc.innerHTML =
+          "正在安装 <em>" + Math.round(v) + "%</em>" +
+          "<small>" + (step || "正在写入文件…") + "</small>";
+      }
+    }
+
+    if (state === "idle") {
+      btnGo.textContent = "安装";
+      btnCancel.textContent = "取消";
+      desc.innerHTML = DESC_IDLE;
+      barWrap.style.setProperty("--p", 0);
+    }
+    if (state === "done") {
+      btnGo.textContent = "开始使用";
+      btnCancel.textContent = "关闭";
+    }
+  };
+
+  function fail(msg) {
+    win.dataset.state = "idle";
+    btnGo.textContent = "重试";
+    btnCancel.textContent = "取消";
+    desc.classList.add("err");
+    // 用 textContent 不用 innerHTML：msg 里会带系统路径，不该被当成标签解析
+    desc.textContent = msg;
+    // 这一行限两行（见 .desc.err），全文挂 title 上
+    desc.title = msg;
+    barWrap.style.setProperty("--p", 0);
+  }
+
+  function doInstall() {
+    window.__set("busy", 0, "正在准备…");
+    invoke("install", { dir: currentDir() })
+      .then(function () {
+        window.__set("done");
+      })
+      .catch(function (e) {
+        fail(String(e && e.message ? e.message : e));
+      });
+  }
+
+  btnGo.addEventListener("click", function () {
+    var st = win.dataset.state;
+    if (!invoke) {
+      // 纯界面稿：走一遍假进度，只为看动效
+      if (st === "idle") window.__set("busy", 8, "正在写入主程序…");
+      return;
+    }
+    if (st === "idle") {
+      doInstall();
+    } else if (st === "done") {
+      // 先拉主程序再关自己：反过来的话窗口一关，spawn 的进程可能被一起带走
+      invoke("launch", { dir: currentDir() })
+        .then(function () { return invoke("quit"); })
+        .catch(function (e) { fail(String(e)); });
+    }
+  });
+
+  function closeWin() {
+    if (T && T.window) T.window.getCurrentWindow().close();
+  }
+  btnClose.addEventListener("click", closeWin);
+  btnCancel.addEventListener("click", function () {
+    // 安装中按「取消」＝关窗；已经装完了就是普通关闭。
+    // 这里不做「回滚已装文件」——装到一半的目录下次覆盖安装会重写，
+    // 半成品留在那里比删一半更安全。
+    closeWin();
+  });
+
+  document.getElementById("btnChg").addEventListener("click", function () {
+    // 装到一半和装完之后都不给改：前者改了就前后不一致，后者改了没意义
+    if (!invoke || win.dataset.state !== "idle") return;
+    invoke("pick_dir", { current: currentDir() })
+      .then(function (p) {
+        // 返回 null ＝ 用户点了取消，路径保持原样，不做任何事
+        if (typeof p === "string" && p) {
+          chosen = p;
+          pathText.textContent = p;
+        }
+      })
+      .catch(function (e) {
+        fail(String(e && e.message ? e.message : e));
+      });
+  });
+
+  if (invoke) {
+    // 默认目录先回来再露脸：露脸时界面已经是最终形态，不会出现
+    // 「路径行空着 → 突然填上」的跳一下。.catch 兜住，失败也不许拖住露脸。
+    invoke("target_dir")
+      .catch(function () { return ""; })
+      .then(function (p) {
+        if (p) {
+          defPath = p;
+          pathText.textContent = p;
+        }
+        reveal();
+      });
+
+    T.event.listen("install://progress", function (ev) {
+      var p = ev.payload || {};
+      window.__set("busy", p.pct, p.step);
+    });
+  } else {
+    // 打开界面稿时也把路径写成真实的默认位置形态，免得截图里是「你」
+    pathText.textContent = "C:\\Users\\你\\AppData\\Local\\牛马薪动了";
+  }
+
+})();
+</script>
+</body>
+</html>

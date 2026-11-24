@@ -1,0 +1,46 @@
+[package]
+name = "paypulse-setup"
+version = "0.1.7"
+edition = "2021"
+rust-version = "1.77"
+description = "牛马薪动了 · 安装程序"
+authors = ["BYDOTA"]
+
+# 不建 lib。这个程序只有一个 bin，没有要给别的 crate 用的东西。
+[[bin]]
+name = "paypulse-setup"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# 关掉默认特性：
+#  · compression（brotli）——那是给「前端资源多、要压着塞进二进制」准备的。
+#    我们整个界面就是一个 16 KB 的 html，为它背上一个 brotli 解码器不值，
+#    实测这一项在 release 里有几百 KB。
+#  · x11 / dbus —— Linux 才用，Windows 上纯属白背代码。
+tauri = { version = "2", default-features = false, features = ["wry", "common-controls-v6"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# 解 payload 时用。压缩那一步在 build.sh 里（python 的 lzma，压得比纯 Rust 的
+# lzma-rs 好一倍：34% vs 64%），这里只负责解——解压器 lzma-rs 是够用的。
+lzma-rs = "0.3"
+
+# 和外壳一样不引 windows-sys：本机是 x86_64-pc-windows-gnu，工具链只带
+# rust-lld 不带 binutils，windows-sys 0.60+ 的 raw-dylib 编译期要 dlltool，
+# 一引就 `cargo build` 直接失败。注册表、选目录对话框那几个函数手写 extern 就够
+# （见 main.rs 的 reg / picker 两个模块）。
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+opt-level = "z"
+strip = "symbols"
+# abort 而不是 unwind：省掉整张栈展开表，实测 5.0 MB → 4.4 MB。
+# 代价是 panic 时进程直接消失、不留展开——但安装器本来就是「崩了就是失败」，
+# unwind 也只是让 main 收到一个 Err 再 expect 一下，用户看到的是同一个结果。
+panic = "abort"
+
+# 这张空表用来消 tauri-winres 的一条告警，别删（原因同 app/src-tauri/Cargo.toml 里的长注释）
+[package.metadata.tauri-winres]
