@@ -213,7 +213,10 @@ if [ -n "$TRIPLE" ]; then
   # "WebView2Loader.dll" 这个名字（报错文案用），一搜就有，纯属误报。
   # 真正要看的是 PE 导入表。
   rm -f "$INSTALLER/dist/WebView2Loader.dll"
-  READOBJ="$(ls "$(rustc --print sysroot)"/lib/rustlib/*/bin/llvm-readobj.exe 2>/dev/null | head -1)"
+  # `|| true` 不能省：这里开了 pipefail，而 CI 的 toolchain 没装 llvm-tools 时
+  # `ls` 会以 2 退出，管道跟着返回 2，set -e 当场把构建打挂——
+  # 明明下一行就写了「没有 llvm-readobj 就跳过校验」的兜底。
+  READOBJ="$(ls "$(rustc --print sysroot)"/lib/rustlib/*/bin/llvm-readobj.exe 2>/dev/null | head -1 || true)"
   if [ -n "$READOBJ" ]; then
     if "$READOBJ" --coff-imports "$OUT" 2>/dev/null | grep -qi 'WebView2Loader'; then
       echo "构建失败：$OUT 的导入表里还有 WebView2Loader.dll，静态链接没生效。" >&2

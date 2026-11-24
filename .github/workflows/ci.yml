@@ -106,6 +106,9 @@ jobs:
         if: steps.core.outputs.present == 'true'
         with:
           targets: x86_64-pc-windows-msvc
+          # build.sh 用它查 PE 导入表，确认 WebView2Loader 是静态链进去的。
+          # 不装也能构建（脚本会跳过那道校验），但那样「单文件」就没人验了。
+          components: llvm-tools-preview
 
       - uses: actions/setup-python@v5
         if: steps.core.outputs.present == 'true'

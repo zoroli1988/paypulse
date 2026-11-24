@@ -39,6 +39,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
+          # 和 CI 一致：build.sh 靠 llvm-readobj 验「WebView2Loader 是静态链的」。
+          # 发版这条路上更不能跳过——它就是「一个文件」这件事的唯一硬证据。
+          components: llvm-tools-preview
 
       # 不装 node：msvc 这条路根本不经过 tauri CLI，前端是 app/ui 下的静态文件
       # （tauri.conf.json 的 frontendDist），由 generate_context!() 在编译期读进去
