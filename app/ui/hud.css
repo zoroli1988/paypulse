@@ -141,6 +141,9 @@ html, body {
 
 .hud-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1px; }
 .hud-label { font-size: 11.5px; color: rgba(var(--fg-rgb), .5); letter-spacing: .3px; }
+/* 右侧那一组：徽章 + 摸鱼开关。用 flex 而不是各自绝对定位——
+   按钮一出现就把徽章往左推一点，比让它压在徽章上稳。 */
+.hud-headright { display: flex; align-items: center; gap: 7px; flex: none; }
 .badge {
   display: inline-flex; align-items: center; gap: 5px;
   padding: 2.5px 9px 2.5px 7px; border-radius: 20px;
@@ -165,8 +168,10 @@ html, body {
   line-height: 1.06; color: var(--accent);
   font-variant-numeric: tabular-nums;
   text-shadow: 0 0 30px rgba(var(--accent-rgb), .32);
-  margin: 3px 0 11px;
 }
+/* 金额和「白嫖 / 已摸」并排。外边距放在这一层：拆成两块之后，
+   谁带 margin 都会让「有没有白嫖列」影响整块的高度。 */
+.hud-main { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin: 3px 0 11px; }
 .hud-amount .cur { font-size: 23px; font-weight: 600; opacity: .8; letter-spacing: 0; margin-right: 1px; }
 
 .hud-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin-bottom: 11px; }
@@ -191,17 +196,48 @@ html, body {
   transition: width .35s cubic-bezier(.4, 0, .2, 1);
 }
 
+/* 底部分两层：标签（低频）和数值（要看清）不是一回事。
+   原来是同一个 42% 的灰，读起来像「一行不重要的小字」；
+   而这一行是「这个月已经赚了多少」，它不该比「距下班」还弱。
+   42% 白在 #111318 上的对比度约 3.1:1，低于小字 4.5:1 的下限。 */
 .hud-foot {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  margin-top: 9px; font-size: 10.5px; color: rgba(var(--fg-rgb), .42);
+  margin-top: 9px; font-size: 11px; color: rgba(var(--fg-rgb), .58);
 }
-.hud-foot b { color: rgba(var(--fg-rgb), .62); font-family: var(--num); font-weight: 600; }
+.hud-foot b {
+  color: rgba(var(--fg-rgb), .82); font-family: var(--num);
+  font-size: 11.5px; font-weight: 600; font-variant-numeric: tabular-nums;
+}
+/* 两段之间一个小圆点：它们本来就是两件事（本月已赚 / 还剩几天），
+   不该糊成一整句。 */
+.hud-foot .foot-dot {
+  width: 3px; height: 3px; border-radius: 50%; flex: none;
+  background: rgba(var(--fg-rgb), .2);
+}
+/* 紧凑档那条精简版。默认不显示，只在 236 那一档顶上来。 */
+.hud-foot-mini { display: none; }
+.hud.size-compact .hud-foot-mini {
+  display: block; margin-top: 8px;
+  font-size: 11px; color: rgba(var(--fg-rgb), .6);
+}
+.hud.size-compact .hud-foot-mini b {
+  font-family: var(--num); font-size: 11px; font-weight: 600;
+  color: rgba(var(--fg-rgb), .78); font-variant-numeric: tabular-nums;
+}
 
+/* 提示行走「被读到」而不是「被忽略」：斜体去掉了——11px 的中文一斜，
+   笔画会变形，看起来像没渲染好，而不是「这是补充说明」。
+   字号和颜色已经足够区分层级，不需要再靠斜体。 */
 .hud-tip {
-  margin-top: 7px; text-align: center; font-size: 11px;
-  color: rgba(var(--fg-rgb), .32); font-style: italic; letter-spacing: .5px;
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  margin-top: 7px; text-align: center; font-size: 11.5px;
+  color: rgba(var(--fg-rgb), .72); letter-spacing: .3px;
   min-height: 16px;
 }
+/* 对勾只在「一切正常」时出现。异常状态（午休 / 请假 / 白干）有各自的语义色，
+   那时候再打一个绿勾，等于在一句坏消息前面加一个「好」。 */
+.hud-tip .tip-ic { display: none; width: 11px; height: 11px; flex: none; color: var(--accent); }
+.hud[data-tipkind="ok"] .hud-tip .tip-ic { display: block; }
 
 /* 静默档：这一行连位置都不占。
    只把文字清空是偷懒——留一条 16px 的空白在那儿，比说话还吵。 */
@@ -264,13 +300,15 @@ html, body {
 .hud.size-compact { width: 236px; padding: 11px 14px 11px; }
 .hud.size-compact .hud-metrics,
 .hud.size-compact .hud-foot,
+.hud.size-compact .hud-hint,
 .hud.size-compact .hud-tip,
 .hud.size-compact .hud-shadow,
 .hud.size-compact .hud-actions,
 .hud.size-compact .hud-expand { display: none; }
 /* 穿透按钮是我们加的（原型里没有），236 宽下正好压在状态徽章上，只能收起来 */
 .hud.size-compact .thru { display: none; }
-.hud.size-compact .hud-amount { font-size: 31px; letter-spacing: -1.4px; margin: 2px 0 8px; }
+.hud.size-compact .hud-amount { font-size: 31px; letter-spacing: -1.4px; }
+.hud.size-compact .hud-main { margin: 2px 0 8px; }
 .hud.size-compact .hud-amount .cur { font-size: 17px; }
 .hud.size-compact .hud-label { font-size: 10.5px; }
 /* 紧凑态宽度只有 236，装不下三段时间，只留已工作与百分比 */
@@ -345,3 +383,142 @@ html, body {
 }
 .hud[data-theme="light"] .bar { background: rgba(0, 0, 0, .1); }
 .hud[data-theme="light"] .hud-shadow b { color: #B26A00; }
+
+/* ================= 摸鱼（0.3.0） =================
+   版式照原型「05 摸鱼模式」的浮窗：插画 → 金额 + 白嫖列 → 进度 → 底部。
+   它没有另起一套皮肤：底色、字体、进度条、底部两层文字全部复用，
+   换掉的只有「多一张图、多一列白嫖、状态徽章转琥珀」这三件事。
+
+   三档的差别也照原型：紧凑 236 把图压成 54px 横幅（只露鱼脸），
+   标准/展开是完整插图。 */
+
+/* 摸鱼开关。视觉 22、热区 28（负 margin 往外扩），**不撑高顶行**。 */
+.fishbtn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 3px;
+  height: 22px; min-width: 22px; padding: 0 3px; margin: -3px -3px -3px 0;
+  border: 1px solid rgba(var(--fg-rgb), .14); border-radius: 8px;
+  background: rgba(var(--fg-rgb), .045);
+  color: rgba(var(--fg-rgb), .52); cursor: pointer; font-family: inherit;
+  transition: color .18s, background .18s, border-color .18s, transform .12s;
+}
+.fishbtn:hover { color: #FFB020; border-color: rgba(255, 176, 32, .34); background: rgba(255, 176, 32, .12); }
+.fishbtn:active { transform: scale(.93); }
+.fishbtn:focus-visible { outline: 2px solid #FFB020; outline-offset: 2px; }
+.fishbtn svg { width: 14px; height: 14px; display: block; flex: none; }
+/* 常规态不写字：路人扫到「摸鱼」两个字，比看到一条鱼严重得多。 */
+.fishbtn .lbl { display: none; font-size: 10.5px; letter-spacing: .3px; padding: 0 3px 0 0; }
+
+/* 摸鱼中：同一个位置变成「鱼 · 退出」的琥珀胶囊。
+   这一刻退出是逃生动作，必须一眼看见——藏起来等于逼人回忆键位。 */
+.hud[data-fishing="1"] .fishbtn {
+  color: #FFB020; border-color: rgba(255, 176, 32, .3);
+  background: rgba(255, 176, 32, .13); padding: 0 8px 0 6px;
+}
+.hud[data-fishing="1"] .fishbtn .lbl { display: inline; }
+.hud[data-fishing="1"] .fishbtn:hover { background: rgba(255, 176, 32, .22); }
+
+/* 现在不能进（休息日 / 请假 / 上班前 / 暂停 / 午休 / 已下班）：
+   整颗降到 30%、光标变 not-allowed。点了不是静默——
+   前端会弹一枚 2 秒气泡说清是哪一条。 */
+.hud[data-fishok="0"] .fishbtn { opacity: .3; cursor: not-allowed; }
+.hud[data-fishok="0"] .fishbtn:hover {
+  color: rgba(var(--fg-rgb), .52); border-color: rgba(var(--fg-rgb), .14);
+  background: rgba(var(--fg-rgb), .045);
+}
+
+/* 那枚 2 秒气泡。绝对定位贴着按钮下方，不占版面。 */
+.fish-tip {
+  position: absolute; right: 10px; top: 34px; z-index: 5;
+  max-width: 214px; padding: 6px 9px; border-radius: 8px;
+  background: rgba(255, 176, 32, .14); border: 1px solid rgba(255, 176, 32, .3);
+  color: #FFD08A; font-size: 10.5px; line-height: 1.5; text-align: left;
+  box-shadow: 0 8px 20px -8px rgba(0, 0, 0, .7);
+}
+.fish-tip[hidden] { display: none; }
+
+/* 插画：装在一块米白「漫画分格」里。黑描边只有落在浅底上才立得住，
+   直接摆在深色玻璃上会糊成一团墨迹，鱼和手一起糊掉。 */
+.hud-art { display: none; padding: 1px 0 9px; }
+.hud[data-fishing="1"] .hud-art { display: flex; justify-content: center; }
+.hud-art-panel {
+  width: 100%; border-radius: 12px; overflow: hidden; background: #FCE9CB;
+  box-shadow: 0 8px 20px -10px rgba(0, 0, 0, .75), inset 0 0 0 1px rgba(120, 80, 20, .14);
+  animation: fishBreathe 3.8s ease-in-out infinite;
+  transform-origin: 50% 88%;
+  will-change: transform;
+}
+.hud-art-panel img {
+  display: block; width: 100%; height: auto;
+  -webkit-user-drag: none; user-select: none;
+}
+@keyframes fishBreathe {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-1.8px) scale(1.014); }
+}
+
+/* 摸鱼态右侧那一列：白嫖金额 + 已摸多久。 */
+.hud-fishside { display: none; text-align: right; padding-top: 12px; flex: none; }
+.hud[data-fishing="1"] .hud-fishside { display: block; }
+.fish-free {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 10.5px; color: #FFB020;
+  background: rgba(255, 176, 32, .12); border: 1px solid rgba(255, 176, 32, .26);
+  border-radius: 7px; padding: 3px 7px; white-space: nowrap;
+}
+.fish-free b { font-family: var(--num); font-size: 11.5px; font-weight: 600; }
+.fish-time {
+  font-size: 10px; color: rgba(var(--fg-rgb), .32);
+  margin-top: 5px; font-family: var(--num);
+}
+
+/* 摸鱼态那行说明。它不是情绪文案，静默档也不收掉——收掉就只剩一张图了。 */
+.hud-hint {
+  display: none; text-align: center; font-size: 10.5px;
+  color: rgba(255, 176, 32, .6); margin-top: 7px; letter-spacing: .3px;
+}
+.hud[data-fishing="1"] .hud-hint { display: block; }
+
+/* 摸鱼态的金额字号照原型：标准 38 / 展开 46 / 紧凑 30。
+   注意它比常规态（43）小——上面多了一张图，主数字再顶满就压不住了。 */
+.hud[data-fishing="1"] .hud-amount { font-size: 38px; letter-spacing: -1.9px; }
+
+/* 紧凑档：图压成一条横幅，只露鱼脸；已摸时长和那行说明都收起来。 */
+.hud.size-compact .hud-art { padding: 0 0 7px; }
+.hud.size-compact .hud-art-panel { height: 54px; border-radius: 8px; animation: none; }
+.hud.size-compact .hud-art-panel img {
+  height: 54px; object-fit: cover; object-position: 70% 30%;
+}
+.hud[data-fishing="1"].size-compact .hud-amount { font-size: 30px; letter-spacing: -1.2px; }
+.hud[data-fishing="1"].size-compact .fish-time { display: none; }
+.hud[data-fishing="1"].size-compact .hud-hint { display: none; }
+.hud[data-fishing="1"].size-expanded .hud-amount { font-size: 46px; letter-spacing: -2.2px; }
+
+/* 摸鱼态的状态徽章转琥珀（摸鱼不是「在岗」的绿，也不是「白干」的暗黄）。 */
+.hud[data-fishing="1"] .badge {
+  background: rgba(255, 176, 32, .13); border-color: rgba(255, 176, 32, .24);
+  color: #FFB020;
+}
+.hud[data-fishing="1"] .badge .dot {
+  background: #FFB020; box-shadow: 0 0 7px #FFB020;
+  animation: fishBlink 1.6s ease-in-out infinite;
+}
+@keyframes fishBlink { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
+
+/* 隐藏金额时白嫖数字也一起糊掉：它同样是钱，漏出去和漏主账是一回事。 */
+.hud[data-masked="1"] .fish-free b { filter: blur(5px); }
+
+@media (prefers-reduced-motion: reduce) {
+  .hud-art-panel, .hud[data-fishing="1"] .badge .dot { animation: none; }
+}
+
+/* 浅色主题：图上那层影子要收一点，否则米白分格在浅底上像贴了块脏东西。 */
+.hud[data-theme="light"] .hud-art-panel {
+  box-shadow: 0 6px 14px -8px rgba(0, 0, 0, .35), inset 0 0 0 1px rgba(120, 80, 20, .18);
+}
+.hud[data-theme="light"] .hud-hint { color: rgba(146, 92, 0, .8); }
+.hud[data-theme="light"] .fishbtn { color: rgba(var(--fg-rgb), .45); }
+.hud[data-theme="light"] .hud[data-fishing="1"] .fishbtn { color: #A66200; }
+
+/* 快捷键唤出的浮窗：8 秒后淡回去。opacity 归零之后再让 Rust 收窗，
+   否则桌面上会「啪」一下少一块东西。 */
+.hud.fading { opacity: 0; transition: opacity .35s ease-out; }

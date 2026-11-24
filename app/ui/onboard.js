@@ -32,7 +32,7 @@
     "barTitle", "steps", "closeBtn",
     "fMonth", "basisChips", "cDay", "cHour", "cSec", "next1",
     "weekChips", "fStart", "fEnd", "fL1", "fL2", "spanHint", "prev2", "next2",
-    "desk", "hudMini", "sizeChips", "swAuto", "prev3", "next3",
+    "desk", "hudMini", "sizeChips", "szDim", "swAuto", "prev3", "next3",
     "sDay", "sHour", "sSpan", "sDays", "finish"
   ].forEach(function (id) { el[id] = document.getElementById(id); });
 
@@ -51,7 +51,9 @@
     end: "18:00",
     l1: "12:00",
     l2: "13:30",
-    size: "standard",
+    // 默认紧凑，不是标准：第一次打开最该给的是最不打扰的那一档。
+    // 302 宽贴在屏幕边上一眼就看见，236 宽几乎融进背景——首因效应只有一次。
+    size: "compact",
     autostart: true,
     // 初始位置：靠右、垂直居中。原型里那张卡就在这个位置——虽然第 4 步文案
     // 说「在桌面右下角待命」，但那说的是真实窗口的默认角，不是这块示意区里的排版。
@@ -136,7 +138,7 @@
     panes.forEach(function (p) { p.classList.toggle("on", +p.getAttribute("data-s") === s); });
     dots.forEach(function (d, i) { d.classList.toggle("on", i < s); });
     el.barTitle.textContent = "牛马薪动了 · 第 " + s + " 步 / 共 4 步";
-    if (s === 3) placeMini();
+    if (s === 3) { applySize(draft.size); placeMini(); }
     if (s === 4) summary();
     if (s === 2) calc();
     if (s === 1) setTimeout(function () { el.fMonth.focus(); el.fMonth.select(); }, 30);
@@ -166,6 +168,28 @@
      没动过就不传 `win_rel`，让悬浮窗保持默认的右下角（第 4 步那句
      「已经在桌面右下角待命」才不是假话）；动过才把位置写进配置。 */
   var dragged = false;
+
+  /* ---------- 09 章：尺寸预览 ----------
+     迷你卡按真实尺寸 1:2 缩放，三个数字就是 HUD 三档的实际像素：
+     236×118 / 302×242 / 322×330。写成一张表，避免和 hud.css 里的三档对不上
+     ——对不上时用户选「展开」，出去发现窗口没这么大，那比不给预览更糟。 */
+  var SZ = {
+    compact:  { w: 118, h: 59,  dim: "236 × 118" },
+    standard: { w: 151, h: 121, dim: "302 × 242" },
+    expanded: { w: 161, h: 165, dim: "322 × 330" }
+  };
+
+  function applySize(z) {
+    var s = SZ[z] || SZ.standard;
+    if (el.hudMini) {
+      el.hudMini.style.width = s.w + "px";
+      el.hudMini.style.height = s.h + "px";
+      // 内部字号、间距全乘这个系数（161 = 展开档宽度），整卡等比缩放而不是只换外框
+      el.hudMini.style.setProperty("--k", (s.w / 161).toFixed(3));
+      el.hudMini.setAttribute("data-z", z);
+    }
+    if (el.szDim) el.szDim.textContent = s.dim;
+  }
 
   function placeMini() {
     if (!el.desk || !el.hudMini) return;
@@ -241,7 +265,11 @@
     calc();
   });
 
-  bindChips(el.sizeChips, "data-z", function (v) { draft.size = v; placeMini(); });
+  bindChips(el.sizeChips, "data-z", function (v) {
+    draft.size = v;
+    applySize(v);
+    placeMini();
+  });
 
   el.swAuto.addEventListener("click", function () {
     draft.autostart = !draft.autostart;
@@ -408,6 +436,7 @@
     Array.prototype.forEach.call(el.sizeChips.querySelectorAll(".chip"), function (n) {
       n.classList.toggle("on", n.getAttribute("data-z") === draft.size);
     });
+    applySize(draft.size);
     el.swAuto.classList.toggle("on", draft.autostart);
     el.swAuto.setAttribute("aria-checked", draft.autostart ? "true" : "false");
   }
@@ -431,7 +460,7 @@
           draft.form = v.week.form || "five";
           draft.flex = !!v.week.flex;
         }
-        draft.size = v.size || "standard";
+        draft.size = v.size || "compact";
         draft.autostart = !!v.autostart;
         prefill();
         calc();

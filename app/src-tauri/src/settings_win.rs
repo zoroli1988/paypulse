@@ -112,6 +112,7 @@ pub struct HotkeyView {
     pub passthru: String,
     pub clock: String,
     pub extra: String,
+    pub fish: String,
 }
 
 #[derive(Serialize)]
@@ -356,6 +357,7 @@ fn view(app: &AppHandle) -> SettingsView {
             passthru: s.hotkey.passthru.clone(),
             clock: s.hotkey.clock.clone(),
             extra: s.hotkey.extra.clone(),
+            fish: s.hotkey.fish.clone(),
         },
         notify: NotifyView {
             end: match s.notify.end {
@@ -492,6 +494,8 @@ pub struct Patch {
     hk_passthru: Option<String>,
     hk_clock: Option<String>,
     hk_extra: Option<String>,
+    /// 摸鱼开关的键位。老前端不传这个字段 → 不动配置。
+    hk_fish: Option<String>,
 
     // ---- 通知 ----
     notify_end: Option<String>,
@@ -797,6 +801,9 @@ fn merge(s: &mut Settings, patch: &Patch, today: NaiveDate) {
     if let Some(v) = &patch.hk_extra {
         s.hotkey.extra = v.trim().to_string();
     }
+    if let Some(v) = &patch.hk_fish {
+        s.hotkey.fish = v.trim().to_string();
+    }
 
     // ---- 通知 ----
     if let Some(v) = &patch.notify_end {
@@ -980,6 +987,7 @@ pub fn apply_settings(app: AppHandle, patch: Patch) -> SettingsView {
         || patch.hk_passthru.is_some()
         || patch.hk_clock.is_some()
         || patch.hk_extra.is_some()
+        || patch.hk_fish.is_some()
     {
         crate::apply_hotkeys(&app);
     }

@@ -65,11 +65,52 @@ html, body {
 
 .head {
   display: flex;
-  align-items: baseline;
+  /* 28 按钮和两行标题一起居中，不是和「今日明细」这一行基线对齐——
+     基线对齐会让按钮看起来比标题低半格。 */
+  align-items: center;
   justify-content: space-between;
+  gap: 10px;
 }
+.head-t { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .head b { font-size: 14px; font-weight: 600; letter-spacing: .2px; }
-.head span { font-size: 10px; color: var(--muted); font-family: var(--mono); letter-spacing: .5px; }
+.head span {
+  font-size: 10.5px;
+  color: rgba(var(--fg-rgb), .4);
+  font-family: var(--mono);
+  letter-spacing: .4px;
+}
+
+/* 关闭按钮：28×28 圆角，和设置窗右上角那个同款语言（06 章）。
+   一扇只能靠 Esc 关的窗，会让人怀疑它是不是卡住了。 */
+.x {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--field);
+  border: 1px solid var(--line);
+  color: rgba(var(--fg-rgb), .6);
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  transition: background .13s, border-color .13s, color .13s;
+}
+.x:hover {
+  background: rgba(255, 92, 92, .14);
+  border-color: rgba(255, 92, 92, .14);
+  color: #FF8A8A;
+}
+.x:active { background: rgba(255, 92, 92, .2); }
+:root[data-theme="light"] .x:hover {
+  background: rgba(214, 48, 48, .1);
+  border-color: rgba(214, 48, 48, .12);
+  color: #C93B3B;
+}
 
 /* 主账：今日已赚 */
 .big {
@@ -223,8 +264,11 @@ html, body {
 <body>
   <div class="card">
     <div class="head">
-      <b>今日明细</b>
-      <span id="today">—</span>
+      <div class="head-t">
+        <b>今日明细</b>
+        <span id="today">—</span>
+      </div>
+      <button class="x" id="closeBtn" title="关闭（Esc）" aria-label="关闭">✕</button>
     </div>
 
     <div class="big">
@@ -412,6 +456,11 @@ html, body {
       // Esc 收窗：焦点还在窗内，失焦回调不会触发，得主动让 Rust 收。
       if (invoke) invoke("close_detail").catch(function () {});
     }
+  });
+
+  // 关闭按钮走的是和 Esc 同一条命令——不留两条收窗路径，免得一条能收一条不能。
+  document.getElementById("closeBtn").addEventListener("click", function () {
+    if (invoke) invoke("close_detail").catch(function () {});
   });
 
   // 每次显示都重新拉最新数据

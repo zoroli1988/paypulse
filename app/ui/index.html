@@ -14,10 +14,41 @@
 
     <div class="hud-head" data-tauri-drag-region>
       <span class="hud-label">今日已赚</span>
-      <span class="badge"><i class="dot"></i><span id="stateLabel">在岗</span></span>
+      <div class="hud-headright">
+        <span class="badge"><i class="dot"></i><span id="stateLabel">在岗</span></span>
+        <!-- 摸鱼开关。常规态只画一条鱼、不写字（路人看到「摸鱼」两个字，
+             比看到一条鱼严重得多）；摸鱼态变成「鱼 · 退出」的琥珀胶囊。
+             它是**主入口**，快捷键只是加速器——两者调同一个后端命令。 -->
+        <button class="fishbtn" id="fishBtn" data-no-drag title="摸鱼模式 · Ctrl+Shift+M" aria-label="进入摸鱼模式">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <ellipse cx="13" cy="12" rx="6.9" ry="5.1" fill="currentColor"/>
+            <path d="M7 12 2.3 8v8L7 12Z" fill="currentColor"/>
+          </svg>
+          <span class="lbl">退出</span>
+        </button>
+      </div>
     </div>
 
-    <div class="hud-amount" data-tauri-drag-region><span class="cur">¥</span><span id="amount">0.000</span></div>
+    <!-- 摸鱼插画。漫画的黑描边必须落在米白底上，直接摆深色玻璃上会糊成一团，
+         所以它装在一块 #FCE9CB 的圆角分格里，像贴了一张漫画剪报。 -->
+    <!-- 点「不可用」的按钮时的 2 秒气泡。绝对定位贴着按钮下方，不占版面。 -->
+    <div class="fish-tip" id="fishTip" hidden></div>
+
+    <div class="hud-art" id="hudArt">
+      <div class="hud-art-panel"><img src="assets/fish-comic.jpg" alt="" draggable="false" /></div>
+    </div>
+
+    <div class="hud-main" data-tauri-drag-region>
+      <div class="hud-amount"><span class="cur">¥</span><span id="amount">0.000</span></div>
+      <!-- 摸鱼态右侧那一列：白嫖金额是主账的子集，标签写清「白嫖」而不是「额外」 -->
+      <div class="hud-fishside" id="fishSide">
+        <div class="fish-free">
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 3v18M18 3v6c0 4-6 4-6 4"/></svg>
+          <span>白嫖</span><b id="fishFree">¥0.00</b>
+        </div>
+        <div class="fish-time">已摸 <span id="fishSec">0m</span></div>
+      </div>
+    </div>
 
     <!-- 三列的「表头」和数值都要能被换掉：请假态显示的是 类型 / 剩余 / 本月，
          不是 每秒 / 时薪 / 日薪。换字在 JS 里，值仍然全部来自 Rust。 -->
@@ -38,8 +69,12 @@
 
     <div class="hud-foot" data-tauri-drag-region>
       <span>本月已赚 <b id="monthEarn">¥0.00</b></span>
-      <span>本月还剩 <b id="monthLeft">0</b> 个工作日</span>
+      <i class="foot-dot"></i>
+      <span>还剩 <b id="monthLeft">0</b> 天</span>
     </div>
+    <!-- 紧凑档：整行藏掉，只留一条精简版。原来紧凑档这一行是**完全没有**的，
+         等于 236px 那一档永远看不到本月概况——而那一档正是默认档。 -->
+    <div class="hud-foot-mini" data-tauri-drag-region>本月 <b id="monthEarnMini">¥0.00</b></div>
 
     <!-- 白干条：义务加班时出现；结束加班后只要当天有记录就保留 -->
     <div class="hud-shadow" id="shadowRow"
@@ -50,7 +85,13 @@
       <span class="hs-note">不计入月薪</span>
     </div>
 
-    <div class="hud-tip" id="tip" data-tauri-drag-region>打卡成功，先稳住</div>
+    <div class="hud-tip" id="tip" data-tauri-drag-region>
+      <svg class="tip-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg>
+      <span id="tipTxt">打卡成功，先稳住</span>
+    </div>
+    <!-- 摸鱼态那行字。放在 tip 下面单独一行，是因为它是**状态说明**不是情绪文案：
+         文案风格改成「静默」时它也不该跟着消失，否则摸鱼态就只剩一张图。 -->
+    <div class="hud-hint" id="fishHint">摸鱼也是在岗，钱照走</div>
 
     <!-- 快捷动作：午休中 / 已下班 → 我在加班；加班中 → 结束加班；其余状态不显示 -->
     <div class="hud-actions">

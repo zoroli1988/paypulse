@@ -18,7 +18,9 @@
     "remainLabel", "remain", "barFill", "monthEarn", "monthLeft", "shadowRow",
     "shadowAmt", "tip", "actStart", "actStartTxt", "actStop", "actStopTxt",
     "thruBtn", "restMask", "k1", "k2", "k3",
-    "eqName", "eqCups", "eqGoal", "eqLeft", "eqDay", "eqGoalBar", "eqDayBar"
+    "eqName", "eqCups", "eqGoal", "eqLeft", "eqDay", "eqGoalBar", "eqDayBar",
+    "fishBtn", "fishFree", "fishSec", "fishSide", "hudArt", "fishTip",
+    "fishHint", "tipTxt", "monthEarnMini"
   ].forEach(function (id) { el[id] = document.getElementById(id); });
 
   /* 三档尺寸的 class 名。顺序即循环顺序（原型 01-D「缩放」）。 */
@@ -152,6 +154,15 @@
   }
 
   /* 月合计要千分位：「本月已赚 ¥7,588.97」比 ¥7588.97 好读。 */
+  /* 摸鱼时长：`1h23m`。不用 01:23:00——那个格式和「已工作」撞脸，
+     两串数字长一样的时候，人会用同一个脑回路去读它们，而它们的含义完全不同。 */
+  function hm(sec) {
+    sec = Math.max(0, Math.floor(sec || 0));
+    var m = Math.floor(sec / 60);
+    if (m < 60) return m + "m";
+    return Math.floor(m / 60) + "h" + pad(m % 60) + "m";
+  }
+
   function money2(milli) {
     return (milli / 1000).toLocaleString("zh-CN", {
       minimumFractionDigits: 2,
@@ -168,6 +179,16 @@
     el.hud.dataset.thru = d.click_through ? "1" : "0";
 
     var s = d.state;
+    /* 摸鱼态：整块版式由 CSS 按这两个标记切（[data-fishing] 长图、[data-fishok] 置灰）。
+       前端不判断「现在能不能摸」——那是后端状态机的结论，这里只照抄。 */
+    el.hud.dataset.fishing = d.fishing ? "1" : "0";
+    el.hud.dataset.fishok = d.fish_available ? "1" : "0";
+    el.fishBtn.title = (d.fishing ? "退出摸鱼" : "摸鱼模式") + " · Ctrl+Shift+M";
+    el.fishBtn.setAttribute("aria-label", (d.fishing ? "退出" : "进入") + "摸鱼模式");
+    if (d.fishing) {
+      el.fishFree.textContent = "¥" + money2(d.fish_milli);
+      el.fishSec.textContent = hm(d.fish_sec);
+    }
     /* 这一帧用哪套文案。静默档的 tip 是空串，CSS 侧按 [data-copy="silent"]
        把整行收掉——留一个 16px 的空行在那儿，比说话还吵。 */
     var copy = copyOf(d);
@@ -250,6 +271,10 @@
 
       el.monthEarn.textContent = "¥" + money2(d.month_earn_milli);
       el.monthLeft.textContent = d.month_left_days;
+      /* 紧凑档只有这一条。千分位保留、小数砍掉——236px 里
+         「本月 ¥5,238.40」会挤到换行，而这一行的作用是「扫一眼」。 */
+      el.monthEarnMini.textContent =
+        "¥" + Math.round(d.month_earn_milli / 1000).toLocaleString("zh-CN");
     }
 
     /* 白干条：只要今天记过就一直留着（原型稿的规矩），
@@ -261,7 +286,12 @@
       el.shadowAmt.textContent = "¥" + money2(d.shadow_milli);
     }
 
-    el.tip.textContent = copy.tip(d, s);
+    var tipText = copy.tip(d, s);
+    el.tipTxt.textContent = tipText;
+    /* 对勾只属于「一切正常」：在岗、没暂停、也没在摸鱼。
+       摸鱼中打勾会读成「摸得好」，午休打勾更是莫名其妙。 */
+    el.hud.dataset.tipkind =
+      (tipText && !d.paused && s === "on" && !d.fishing) ? "ok" : "";
 
     /* 快捷动作：只在「现在确实能做点什么」的状态出现。
        在岗、请假不显示，避免误触。 */
@@ -341,7 +371,10 @@
 
   document.addEventListener("mousedown", function (e) {
     if (!win || e.button !== 0) return;
-    if (e.target.closest("button")) return;
+    /* 按钮和 `data-no-drag` 都不算拖拽起点。后者是给「以后新加的可点元素」
+       留的约定：0.1.x 的整窗 mousedown 一旦抓住事件，表现就是「点了没反应」，
+       而那是最难查的一类故障——没有任何报错。 */
+    if (e.target.closest("button,[data-no-drag]")) return;
     e.preventDefault();          // 别让这次按下变成选文字
     win.startDragging().catch(function () {});
   }, true);
@@ -373,6 +406,48 @@
     e.stopPropagation();
     if (invoke) invoke("set_click_through", { on: true }).catch(function () {});
   });
+
+  /* ---- 摸鱼开关 ----
+   *
+   * 这颗按钮是**主入口**：快捷键是加速器，它是看得见、点得到的那一个。
+   * 进不去的时候不能静默——后端会带回一句具体原因（休息日 / 午休 / 暂停 /
+   * 已下班 / 还没上班），这里把它贴在按钮下方 2.4 秒。
+   */
+  var fishTipTimer = 0;
+
+  function showFishTip(text) {
+    el.fishTip.textContent = text;
+    el.fishTip.hidden = false;
+    if (fishTipTimer) clearTimeout(fishTipTimer);
+    fishTipTimer = setTimeout(function () {
+      el.fishTip.hidden = true;
+      fishTipTimer = 0;
+    }, 2400);
+  }
+
+  el.fishBtn.addEventListener("click", function (e) {
+    e.stopPropagation();
+    if (!invoke) return;
+    invoke("toggle_fishing")
+      .then(function (r) {
+        if (r && r.ok === false) {
+          showFishTip(r.reason || "现在不能摸鱼");
+          return;
+        }
+        el.fishTip.hidden = true;
+        loop();
+      })
+      .catch(function () { showFishTip("没摸成，稍后再试"); });
+  });
+
+  /* 快捷键在浮窗藏着的时候把它叫了出来：8 秒后自己淡回去。
+     Rust 那边 8300ms 时 hide 窗口，这里提前 400ms 开始淡——
+     直接 hide 会「啪」一下消失，在桌面上很扎眼。 */
+  if (window.__TAURI__ && window.__TAURI__.event) {
+    window.__TAURI__.event.listen("fish:autohide", function () {
+      setTimeout(function () { el.hud.classList.add("fading"); }, 7600);
+    });
+  }
 
   /* ---- 三档尺寸循环（原型 01-D「缩放」） ----
      三条入口共用后端那一个 cycle_size：双击标题区、窗口上滚轮、托盘菜单。

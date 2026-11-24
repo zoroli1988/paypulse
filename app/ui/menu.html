@@ -48,7 +48,7 @@ html, body {
 
 .card {
   width: 220px;
-  height: 260px;
+  height: 300px;
   padding: 8px;
   border-radius: 12px;
   background: var(--bg);
@@ -78,6 +78,10 @@ html, body {
   transition: background .12s;
 }
 .item:hover { background: var(--hover); }
+/* 摸鱼那一行：进不去的时候置灰。菜单项本来就没有 disabled 态，
+   用底色和光标说清「现在点不动」，比点了没反应好。 */
+.item.dim { opacity: .38; cursor: not-allowed; }
+.item.dim:hover { background: transparent; }
 
 .item .ic {
   width: 18px;
@@ -123,6 +127,13 @@ html, body {
     <div class="item" data-action="pause" id="pauseItem">
       <span class="ic">⏸</span><span class="lbl">暂停计时</span><span class="check">✓</span>
     </div>
+    <!-- 摸鱼：三个入口里的「兜底」那个——记不住键位、也不想瞄准按钮的人用它。
+         右边那串键位是**当前配置里的键**，改了设置这里就跟着变。 -->
+    <div class="item" data-action="fish" id="fishItem">
+      <span class="ic"><svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><ellipse cx="13" cy="12" rx="6.9" ry="5.1" fill="currentColor"/><path d="M7 12 2.3 8v8L7 12Z" fill="currentColor"/></svg></span>
+      <span class="lbl" id="fishLbl">进入摸鱼</span>
+      <span class="sub" id="fishKey">Ctrl+Shift+M</span>
+    </div>
     <div class="sep"></div>
     <div class="item" data-action="detail">
       <span class="ic">▤</span><span class="lbl">今日明细</span><span class="check">✓</span>
@@ -164,8 +175,28 @@ html, body {
       if (pause) pause.classList.toggle("checked", !!v.paused);
       var size = document.getElementById("sizeLabel");
       if (size) size.textContent = sizeNames[v.size] || v.size;
+
+      /* 摸鱼那一行：词随状态变（进入 / 退出），键位跟着设置走，
+         进不去的时候整行置灰。置灰仍然可以点——点了会弹一句原因，
+         比「点不动又不说为什么」好。 */
+      var item = document.getElementById("fishItem");
+      var lbl = document.getElementById("fishLbl");
+      if (lbl) lbl.textContent = v.fishing ? "退出摸鱼" : "进入摸鱼";
+      if (item) item.classList.toggle("dim", !v.fishing && !v.fish_available);
+      if (window.__paintFishKey) window.__paintFishKey();
     }).catch(function () {});
   }
+
+  /* 键位显示：单独问一次设置（menu_state 只回答状态，不回答配置）。
+     拿不到就保留 HTML 里的默认字样，不显示空白。 */
+  window.__paintFishKey = function () {
+    if (!invoke) return;
+    invoke("get_settings").then(function (v) {
+      var k = document.getElementById("fishKey");
+      if (k && v && v.hotkey && v.hotkey.fish) k.textContent = v.hotkey.fish;
+    }).catch(function () {});
+  };
+  window.__paintFishKey();
 
   document.querySelectorAll(".item").forEach(function (it) {
     it.addEventListener("click", function (e) {

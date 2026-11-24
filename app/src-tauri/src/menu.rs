@@ -28,21 +28,35 @@ pub const LABEL: &str = "hudmenu";
 /// 溢出 18px，`overflow:hidden` 会把最后一项「退出」裁掉一截。现在按原型给够，
 /// 菜单项在 `menu.html` 里改成 `flex: 1` 均分高度——以后再改尺寸也不会裁。
 const MENU_W: f64 = 220.0;
-const MENU_H: f64 = 260.0;
+/// 六项之后的高度。
+///
+/// 原来 260 是按五项算的（五项 × 36 + 两条分隔 + padding）。加「摸鱼」这一项
+/// 至少要多 36px，再加上分隔线的余量，取 300。菜单项本身是 `flex: 1` 均分，
+/// 所以多一点比少一点安全——少了会把「退出」裁掉一截，多了只是留白。
+const MENU_H: f64 = 300.0;
 
 /// 菜单项的当前状态：暂停勾选、三档尺寸名。
 #[derive(serde::Serialize)]
 pub struct MenuState {
     pub paused: bool,
     pub size: String,
+    /// 现在是不是正在摸鱼。菜单那一行据此在「进入 / 退出」之间换词。
+    pub fishing: bool,
+    /// 现在能不能进。不能进时那一行置灰——不是点不动就完了，
+    /// 置灰 + 右键菜单外的六个入口念同一句原因。
+    pub fish_available: bool,
 }
 
 #[tauri::command]
 pub fn menu_state(app: AppHandle) -> MenuState {
     let s = app.state::<AppState>().settings();
+    let now = crate::clock(&s);
+    let snap = crate::snapshot_at(now, &s);
     MenuState {
         paused: paypulse_clock::is_paused(&s.spans()),
         size: s.size.as_str().to_string(),
+        fishing: snap.fishing,
+        fish_available: snap.fish_available,
     }
 }
 

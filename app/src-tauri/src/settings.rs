@@ -109,6 +109,28 @@ pub struct PauseRec {
     pub end: Option<i64>,
 }
 
+/// 一段摸鱼，落盘用。
+///
+/// 和 [`PauseRec`] 同一个形状：`end: None` 表示「现在正在摸」。
+/// 为什么落盘而不是只活在内存里：摸鱼时长和白嫖金额要进「今日明细」，
+/// 而用户一天里会退出重开好几次——只放内存的话，每次重开就清零，
+/// 明细里的数和浮窗上的数会当场对不上。
+///
+/// 但「正在摸」这个**状态**不跨重启恢复（见 `drop_dangling_fish`）：
+/// 摸鱼是「当下正在发生的行为」，隔了一夜还说自己在摸鱼就不成立了。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FishRec {
+    pub start: i64,
+    pub end: Option<i64>,
+    /// 这一段「不进钱」：义务加班时段开的摸鱼。
+    ///
+    /// 为什么记在段上而不是每次按当前状态算：状态会变。中午义务加班时开的摸鱼，
+    /// 下午转回在岗之后再去算，就会把那段本来不进钱的时间按在岗价补上一笔钱——
+    /// 白嫖金额是「主账的子集」，凭空多出来的这一截会直接穿帮。
+    #[serde(default)]
+    pub no_pay: bool,
+}
+
 /// 一笔额外进账，落盘用。
 ///
 /// 只记「哪天、多少」两件事。日期存 `YYYY-MM-DD` 而不是时间戳，是因为
@@ -155,15 +177,22 @@ impl Default for OtMode {
 pub enum Size {
     /// 236 × 118：贴边用，只留金额、已工作、进度条
     Compact,
-    /// 302 × 242：默认
+    /// 302 × 242
     Normal,
     /// 322 × 330：多一块「奶茶等价物」
     Expanded,
 }
 
 impl Default for Size {
+    /// 默认给紧凑档，不是标准档（09 章）。
+    ///
+    /// 第一次打开最该给的是**最不打扰**的那一档：302 宽贴在屏幕边上一眼就看见，
+    /// 236 宽几乎融进背景。首因效应只有一次，之后再改默认值也追不回来。
+    ///
+    /// 只影响「新装」和「配置文件损坏后重建」——老用户的配置里已经有 `size` 字段，
+    /// 读出来是什么就是什么，不会因为改了这个默认值而被动换档。
     fn default() -> Self {
-        Self::Normal
+        Self::Compact
     }
 }
 
@@ -664,6 +693,22 @@ pub struct HotkeyCfg {
     pub passthru: String,
     pub clock: String,
     pub extra: String,
+    /// 进入 / 退出摸鱼。
+    ///
+    /// 默认 `Ctrl+Shift+M`（M = 摸）。没选 `F` 是因为编辑器、浏览器里
+    /// `Ctrl+Shift+F` 几乎都是「全局搜索」，撞车概率太高；
+    /// 也没选 `Ctrl+Shift+B`——那个留给了「立即模糊」（隐私那一章）。
+    #[serde(default = "de_fish_key")]
+    pub fish: String,
+}
+
+/// 老配置里没有 `fish` 字段时的默认值。
+///
+/// 不能用 `#[serde(default)]` 直接吃 `String::default()`：那会给一个空串，
+/// 而空串在 `parse` 里返回 `None`，于是「升级之后摸鱼快捷键是空的」，
+/// 用户还得自己去设置里录一遍才知道有这么个功能。
+fn de_fish_key() -> String {
+    "Ctrl+Shift+M".to_string()
 }
 
 impl Default for HotkeyCfg {
@@ -674,6 +719,7 @@ impl Default for HotkeyCfg {
             passthru: "Ctrl+Shift+L".to_string(),
             clock: "Ctrl+Shift+Enter".to_string(),
             extra: "Ctrl+Shift+E".to_string(),
+            fish: de_fish_key(),
         }
     }
 }
@@ -932,6 +978,13 @@ pub struct Settings {
     pub monitor_primary: bool,
     /// 暂停区间。扣减量由区间算出，不做累加——见 `paypulse_clock::PauseSpan`。
     pub pauses: Vec<PauseRec>,
+    /// 今天的摸鱼区间。`end: None` = 正在摸。
+    ///
+    /// 为什么不是一个布尔：摸鱼要出两个数——摸了多久、这段里白嫖了多少钱——
+    /// 而这两个数都是「区间长度」的函数，布尔推不出来。开关多次就落多段，
+    /// 和暂停、白干用同一套记法，明细里也能逐段列出来。
+    #[serde(default)]
+    pub fish_spans: Vec<FishRec>,
     /// 一笔一笔记下来的额外进账（加班费、补贴、报销到账）。
     ///
     /// 它是**唯一**一处「与时间无关的钱」：日薪和时薪不认它，只在本月
@@ -1032,6 +1085,7 @@ impl Default for Settings {
             win_by_monitor: std::collections::BTreeMap::new(),
             monitor_primary: false,
             pauses: Vec::new(),
+            fish_spans: Vec::new(),
             extras: Vec::new(),
             crash_log: false,
             last_alive: None,
@@ -1111,6 +1165,19 @@ impl Settings {
             Some(e) => e >= p.start,
             None => true,
         });
+
+        // 摸鱼区间同理：结束早于开始的丢掉。条数封到 200——
+        // 一天开关上百次的人不多，但真有人会（手抖、边试边玩），
+        // 而每段只有 16 字节，封顶只是防「文件被写坏塞进几千条」。
+        self.fish_spans.retain(|f| match f.end {
+            Some(e) => e >= f.start,
+            None => true,
+        });
+        if self.fish_spans.len() > 200 {
+            self.fish_spans.sort_by_key(|f| f.start);
+            let drop = self.fish_spans.len() - 200;
+            self.fish_spans.drain(0..drop);
+        }
 
         // 音量是乘法因子，超过 100 会削顶（数字听着像破音，像是程序坏了）。
         self.notify.volume = self.notify.volume.min(100);

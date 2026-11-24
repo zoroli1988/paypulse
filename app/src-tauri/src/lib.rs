@@ -18,7 +18,8 @@ use paypulse_clock::{
     prune_pauses, Calendar, Phase,
 };
 use paypulse_core::{
-    calc_of, shadow_seconds, shadow_sum, Params, ShadowSpan, State as EngineState,
+    calc_of, fish_seconds, fish_should_merge, fish_value, shadow_seconds, shadow_sum, FishSpan,
+    Params, ShadowSpan, State as EngineState,
 };
 use serde::Serialize;
 use std::path::PathBuf;
@@ -124,6 +125,19 @@ fn drop_dangling_pauses(cfg: &mut Settings) -> usize {
     let before = cfg.pauses.len();
     cfg.pauses.retain(|p| p.end.is_some());
     before - cfg.pauses.len()
+}
+
+/// 收掉上一个进程留下的「还在摸」。
+///
+/// 摸鱼**不跨重启恢复**：`end: None` 的那段直接丢掉（按零长度结算），不补到 now。
+/// 补到 now 等于替用户宣布「你从昨晚十点摸到现在」，凭空造出一整夜的时长和钱。
+/// 正常退出时 `flush` 会按退出那一刻收口，所以这里只兜「被强杀 / 断电」的情况。
+///
+/// 注意这和暂停相反：暂停要保留（那段不该计薪），摸鱼要丢掉（那段不该算摸过）。
+fn drop_dangling_fish(cfg: &mut Settings) -> usize {
+    let before = cfg.fish_spans.len();
+    cfg.fish_spans.retain(|f| f.end.is_some());
+    before - cfg.fish_spans.len()
 }
 
 /// 这一帧该不该弹「今日已到账」。
@@ -356,7 +370,16 @@ impl AppState {
         let s = if self.is_fresh() {
             self.settings()
         } else {
-            self.mutate(|s| s.last_alive = Some(now))
+            self.mutate(|s| {
+                s.last_alive = Some(now);
+                // 「正在摸」按退出这一刻收口：不等下一次 tick，也不补到下次启动。
+                // 用户关机的那一刻就是摸鱼的终点，这是他自己按下的「结束」。
+                for f in s.fish_spans.iter_mut() {
+                    if f.end.is_none() {
+                        f.end = Some(now.max(f.start));
+                    }
+                }
+            })
         };
         if let Err(e) = settings::save_to(&self.dir, &s) {
             eprintln!("退出前保存配置失败：{e}");
@@ -520,6 +543,26 @@ struct Snapshot {
     shadow_sec: u32,
     /// 白干来源：break（午休 1×）/ after（下班后 1.5×）
     shadow_src: String,
+
+    // ---- 摸鱼（**主账的子集**，不是第二笔收入）----
+    /// 现在是否正在摸鱼
+    fishing: bool,
+    /// 今日累计摸鱼秒数
+    fish_sec: u32,
+    /// 今日「白嫖」金额（毫）＝ 摸鱼这段时间里跟着涨的那部分钱。
+    /// **它已经包含在 `amount_milli` 里**，任何地方都不许再加一次。
+    fish_milli: i64,
+    /// 现在能不能进摸鱼（休息日 / 请假 / 上班前 / 暂停 / 午休 / 已下班 → false）
+    fish_available: bool,
+    /// 不能进的具体原因。按钮的气泡、快捷键的提示都念这一句。
+    fish_reason: String,
+    /// 「正在摸」的那段该在什么时候收口（Unix 秒），0 = 没有正在摸的。
+    ///
+    /// 这是给 `observe` 用的内部时钟，**不给前端**：前端要知道的是「现在是不是
+    /// 摸鱼中」，而不是「你打算什么时候结束」。把它塞进快照会让「收口时刻」
+    /// 变成一个可以显示的数，而它只是记账细节。
+    #[serde(skip)]
+    fish_open_end: i64,
 
     /// 已工作秒数（= 已计薪秒，不是墙上时钟）
     worked_sec: u32,
@@ -826,6 +869,85 @@ pub(crate) fn snapshot_at(now: DateTime<FixedOffset>, s: &Settings) -> Snapshot 
     let shadow_milli = out.shadow + lunch_shadow_milli;
     let shadow_sec = (if r.src == "after" { out.ot_sec } else { 0 }) + lunch_shadow_sec;
 
+    // ---- 摸鱼 ----
+    //
+    // 三件事要分清：
+    // ① 时长与金额都是区间的函数，换算在私有引擎里（`fish_seconds/fish_value`）；
+    // ② 边界（下班 / 午休 / 暂停）由这里算成「封顶秒数」交给引擎；
+    // ③ 白嫖金额是主账的**子集**，只用来显示，绝不参与任何加总。
+    let paused_now = is_paused(&s.spans());
+    let lunch_in = lunch_in_at(now, &cal);
+    let lunch_rem = lunch_remaining_at(now, &cal);
+    let fishing_now = s
+        .fish_spans
+        .iter()
+        .any(|f| f.end.is_none() && f.start >= lo);
+
+    // 到「必须收口」还有多少秒。三处边界取最近的：
+    // 日工时攒满（= 下班）、午休开始、以及「已经暂停了」这个立刻边界。
+    // 用 `u32::MAX` 起步而不是 0：没有边界时才不会把封顶算成 0。
+    let mut cap_left: u32 = u32::MAX;
+    if paused_now {
+        cap_left = 0;
+    }
+    if lunch_in > 0 {
+        cap_left = cap_left.min(lunch_in);
+    }
+    if paid_sec < p.daily_sec {
+        cap_left = cap_left.min(p.daily_sec - paid_sec);
+    }
+
+    let fish_recs: Vec<&settings::FishRec> = s
+        .fish_spans
+        .iter()
+        .filter(|f| f.start >= lo)
+        .collect();
+    let fish_spans: Vec<FishSpan> = fish_recs
+        .iter()
+        .map(|f| {
+            let cap_sec = match f.end {
+                // 收口的那段：长度就是封顶，之后不再随 now 增长
+                Some(e) => e.saturating_sub(f.start).max(0) as u32,
+                // 还在摸：到边界还有 cap_left 秒，所以封顶 = 已经摸了多久 + 还剩多久。
+                // 这个和在两次 tick 之间是**不变量**，不会越算越小。
+                None => ((now_ts - f.start).max(0) as u32).saturating_add(cap_left),
+            };
+            FishSpan {
+                start: f.start.max(0) as u64,
+                rate_x100: if f.no_pay { 0 } else { 100 },
+                cap_sec,
+            }
+        })
+        .collect();
+    let fish_sec = fish_seconds(&fish_spans, now_u);
+    let fish_milli = fish_value(&fish_spans, now_u, &p);
+    // 「正在摸」那段的收口时刻 = 起点 + 封顶。收口的段不算——它已经结束了。
+    let fish_open_end = fish_recs
+        .iter()
+        .zip(fish_spans.iter())
+        .filter(|(rec, _)| rec.end.is_none())
+        .map(|(_, sp)| sp.start as i64 + sp.cap_sec as i64)
+        .max()
+        .unwrap_or(0);
+
+    // 谁能进摸鱼。逐条给理由，是为了「点了没反应」这件事不再发生——
+    // 六个入口（按钮 / 快捷键 / 右键菜单 / 托盘 / 设置页 / 引导）念的是同一句话。
+    let (fish_available, fish_reason) = if on_leave {
+        (false, "今天请假，不计薪")
+    } else if rest {
+        (false, "今天是休息日，不计薪")
+    } else if waiting || phase == Phase::BeforeWork {
+        (false, "还没到上班时间")
+    } else if paused_now {
+        (false, "计时暂停中，先恢复再摸鱼")
+    } else if phase == Phase::Lunch {
+        (false, "午休时间，本来就不计薪")
+    } else if r.ui == UiState::Done {
+        (false, "已经下班了，明天再摸")
+    } else {
+        (true, "")
+    };
+
     let base = paid_sec.min(p.daily_sec);
     let done_before = cal.workdays_before(today) as i64;
     let day_milli = p.day_milli();
@@ -864,14 +986,23 @@ pub(crate) fn snapshot_at(now: DateTime<FixedOffset>, s: &Settings) -> Snapshot 
         shadow_sec,
         shadow_src: r.src.to_string(),
 
+        // 摸鱼：状态只在「能进」的时候才算数。午休开始时 `observe` 会在下一次
+        // tick 把它收口，但这一帧（以及收口失败时）不该让浮窗还挂着「摸鱼中」。
+        fishing: fishing_now && fish_available,
+        fish_sec,
+        fish_milli,
+        fish_available,
+        fish_reason: fish_reason.to_string(),
+        fish_open_end,
+
         // 「已工作」封顶在日工时：到点/满勤之后它就该冻结在 daily_sec，
         // 多出来的那部分归 `ot_sec`（右下角「已过 / 已加班」），不能再往里涨——
         // 否则下班后「已工作的累计时间」会一路叠加，看起来像软件算错。
         worked_sec: base,
         ot_sec: out.ot_sec,
         remain_sec: p.daily_sec.saturating_sub(base),
-        lunch_remain_sec: lunch_remaining_at(now, &cal),
-        lunch_in_sec: lunch_in_at(now, &cal),
+        lunch_remain_sec: lunch_rem,
+        lunch_in_sec: lunch_in,
         progress: base as f64 / p.daily_sec as f64,
 
         day_milli,
@@ -888,7 +1019,7 @@ pub(crate) fn snapshot_at(now: DateTime<FixedOffset>, s: &Settings) -> Snapshot 
         state: r.ui.as_str().to_string(),
 
         rest,
-        paused: is_paused(&s.spans()),
+        paused: paused_now,
         pause_sec,
         hide_money: s.hide_money,
         click_through: s.click_through,
@@ -1209,8 +1340,156 @@ fn tick(app: tauri::State<AppState>, handle: tauri::AppHandle) -> Snapshot {
     }
 
     let snap = snapshot_at(now, &s);
+    // 摸鱼到边界（下班 / 午休 / 暂停）就收口。放在 observe 之前，
+    // 因为 observe 里的通知判断要看「这一帧到底还在不在摸」。
+    let mut snap = snap;
+    if close_fish_if_due(&app, &snap, now.timestamp()) {
+        snap = snapshot_at(now, &app.settings());
+    }
     observe(&handle, &app, &snap, now);
+    LAST_TICK.store(now.timestamp(), std::sync::atomic::Ordering::Relaxed);
     snap
+}
+
+/// 上一帧的时刻。只为「程序睡过去了」这一种情况存在。
+///
+/// 笔记本合盖一夜再打开，第一帧的「现在」比边界晚了几个小时。这时候要是
+/// 拿 now 去给摸鱼收口，一夜就成了摸鱼时长；拿上一帧的时刻收口，那一夜
+/// 才落在「程序没跑」的那一边——和暂停、白干的口径一致。
+static LAST_TICK: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+/// 该不该给「正在摸」的那段收口；收了口返回 true（调用方需要重算一帧）。
+fn close_fish_if_due(st: &AppState, snap: &Snapshot, ts: i64) -> bool {
+    if !st
+        .settings()
+        .fish_spans
+        .iter()
+        .any(|f| f.end.is_none())
+    {
+        return false;
+    }
+    let due = snap.fish_open_end > 0 && snap.fish_open_end <= ts;
+    // 状态变了（进午休 / 被暂停 / 请假 / 下班）也立刻收：那几种状态下
+    // 「还在摸鱼」本身就是个假状态，留着它按钮会挂着「退出」却退不出来。
+    if !due && snap.fish_available {
+        return false;
+    }
+    let cut = if due {
+        snap.fish_open_end
+    } else {
+        let prev = LAST_TICK.load(std::sync::atomic::Ordering::Relaxed);
+        if prev > 0 {
+            (prev + 1).min(ts)
+        } else {
+            ts
+        }
+    };
+    st.mutate(|c| {
+        for f in c.fish_spans.iter_mut() {
+            if f.end.is_none() {
+                f.end = Some(cut.max(f.start));
+            }
+        }
+    });
+    log::w(&format!("摸鱼收口 @{cut}（边界={}）", snap.fish_open_end));
+    true
+}
+
+/// 摸鱼开关的返回。
+///
+/// `ok = false` 不是错误——它是「现在不能进」这个业务答案，
+/// 前端据此弹气泡、快捷键据此弹托盘提示，都不该走 catch。
+#[derive(Serialize)]
+pub struct FishResult {
+    pub fishing: bool,
+    pub ok: bool,
+    pub reason: String,
+}
+
+/// 5 秒内退出又进来，算同一段。
+///
+/// 为什么是 5 秒：手抖点两下、或者按错了立刻按回来，通常都在两秒内；
+/// 真的去倒了杯水再回来，怎么也不止 5 秒。窗口值放在外壳而不是引擎里，
+/// 因为它是**产品口径**，引擎只负责「给两个时刻和一个窗口，判合不合」。
+const FISH_MERGE_WINDOW: u32 = 5;
+
+/// 进入 / 退出摸鱼。**四个入口共用这一个命令**：浮窗按钮、全局快捷键、
+/// 右键菜单、以及以后可能加的托盘项——逻辑只有一份，不存在「按钮能进、
+/// 快捷键进不去」这种分裂。
+#[tauri::command]
+fn toggle_fishing(app: tauri::State<AppState>) -> FishResult {
+    fish_toggle(&app)
+}
+
+/// 真正的实现。命令和快捷键都走这里——快捷键线程上拿不到 `State` 的包装，
+/// 但它能拿到 `AppState` 本身，所以入口只有一个，不存在两套逻辑。
+pub(crate) fn fish_toggle(st: &AppState) -> FishResult {
+    let app = st;
+    let s = app.settings();
+    let now = clock(&s);
+    let ts = now.timestamp();
+    let lo = day_start(now);
+
+    // 正在摸 → 退出。退出永远允许，哪怕已经下班了（收口那一刻也得能按）。
+    if s.fish_spans.iter().any(|f| f.end.is_none()) {
+        app.mutate(|c| {
+            for f in c.fish_spans.iter_mut() {
+                if f.end.is_none() {
+                    f.end = Some(ts.max(f.start));
+                }
+            }
+        });
+        return FishResult {
+            fishing: false,
+            ok: true,
+            reason: String::new(),
+        };
+    }
+
+    // 想进来：先问状态机允不允许。不允许就把原因原样带回去。
+    let snap = snapshot_at(now, &s);
+    if !snap.fish_available {
+        return FishResult {
+            fishing: false,
+            ok: false,
+            reason: snap.fish_reason,
+        };
+    }
+
+    // 义务加班时段开的摸鱼不进钱：主账本来就冻着，摸鱼不该凭空生出收入。
+    let no_pay = snap.state == "unpaid";
+    let last = s
+        .fish_spans
+        .iter()
+        .filter(|f| f.start >= lo)
+        .max_by_key(|f| f.start)
+        .copied();
+
+    let merged = last
+        .and_then(|l| l.end.map(|e| (l.start, e)))
+        .map_or(false, |(_, e)| {
+            fish_should_merge(e.max(0) as u64, ts.max(0) as u64, FISH_MERGE_WINDOW)
+        });
+    if merged {
+        app.mutate(|c| {
+            if let Some(last) = c.fish_spans.iter_mut().filter(|f| f.start >= lo).max_by_key(|f| f.start) {
+                last.end = None;
+            }
+        });
+    } else {
+        app.mutate(|c| {
+            c.fish_spans.push(settings::FishRec {
+                start: ts,
+                end: None,
+                no_pay,
+            });
+        });
+    }
+    FishResult {
+        fishing: true,
+        ok: true,
+        reason: String::new(),
+    }
 }
 
 /// 悬浮窗底部那个按钮。`start` = 我在加班，`stop` = 结束加班。
@@ -1489,6 +1768,7 @@ fn hotkey_conflict(app: &tauri::AppHandle, id: u32, label: &str) {
         platform::HK_PASSTHRU => "穿透",
         platform::HK_CLOCK => "计时",
         platform::HK_EXTRA => "记一笔",
+        platform::HK_FISH => "摸鱼",
         _ => "快捷键",
     };
     // 文案要能塞进 340×96 的卡片：标题一行、正文一行。
@@ -1514,6 +1794,7 @@ pub(crate) fn apply_hotkeys(app: &tauri::AppHandle) {
             (platform::HK_PASSTHRU, &s.hotkey.passthru),
             (platform::HK_CLOCK, &s.hotkey.clock),
             (platform::HK_EXTRA, &s.hotkey.extra),
+            (platform::HK_FISH, &s.hotkey.fish),
         ] {
             // 解析不出来就只跳过这一个：写错一个不该让另外两个失效
             if let Some((mods, vk)) = platform::parse(spec) {
@@ -1567,6 +1848,37 @@ fn on_hotkey(app: &tauri::AppHandle, id: u32) {
         }
         platform::HK_EXTRA => {
             let _ = open_extra(app);
+        }
+        platform::HK_FISH => {
+            // 与浮窗按钮、右键菜单完全等价：同一个 `fish_toggle`。
+            let st = app.state::<AppState>();
+            let r = fish_toggle(&st);
+            if !r.ok {
+                // 进不去时说清原因。用一张 2.5 秒自散的小卡片而不是弹窗——
+                // 这条是「顺手按了一下」，弹窗会打断手上正在干的事。
+                // 建窗口必须在主线程上，而热键线程不是。
+                let app2 = app.clone();
+                let reason = r.reason.clone();
+                let _ = app.run_on_main_thread(move || {
+                    toast::show(&app2, "现在不能摸鱼", &reason, "warn");
+                });
+                return;
+            }
+            // 浮窗藏着的时候按快捷键：唤出来看一眼，8 秒后自己淡回去。
+            // 不这样的话，在别的窗口里按一下什么都不会发生——用户会以为键没生效。
+            if let Some(w) = app.get_webview_window(HUD_LABEL) {
+                if !w.is_visible().unwrap_or(true) {
+                    let _ = w.show();
+                    let app2 = app.clone();
+                    let _ = app.emit_to(HUD_LABEL, "fish:autohide", ());
+                    std::thread::spawn(move || {
+                        std::thread::sleep(Duration::from_millis(8300));
+                        if let Some(w) = app2.get_webview_window(HUD_LABEL) {
+                            let _ = w.hide();
+                        }
+                    });
+                }
+            }
         }
         _ => {}
     }
@@ -2166,6 +2478,13 @@ pub fn run() {
                     "收掉 {dropped} 段没收口的暂停（上个进程没正常收尾，留着会冻住今日已赚）"
                 ));
             }
+            // 摸鱼反过来：没收口的那段直接丢掉，不补时长。
+            let fish_dropped = drop_dangling_fish(&mut cfg);
+            if fish_dropped > 0 {
+                log::w(&format!(
+                    "丢掉 {fish_dropped} 段没收口的摸鱼（状态不跨重启，昨天摸的不算今天）"
+                ));
+            }
 
             app.manage(AppState::new(dir, cfg.clone(), fresh));
 
@@ -2428,6 +2747,7 @@ pub fn run() {
             hud_menu,
             set_click_through,
             toggle_pause,
+            toggle_fishing,
             resize_hud,
             cycle_size,
             add_extra,
@@ -3316,5 +3636,86 @@ mod tests {
         // 所以只认往回调——那个方向是单调时钟永远造不出来的。
         assert!(!clock_tampered(8 * 3600, 1, false), "睡眠不该被当成改表");
         assert!(clock_tampered(-3_600, 1, false), "往回调必须抓到");
+    }
+
+    // ---------------------------------------------------------- 摸鱼
+
+    fn with_fish(start_ts: i64, end: Option<i64>, no_pay: bool) -> Settings {
+        let mut s = Settings::default();
+        s.fish_spans.push(settings::FishRec {
+            start: start_ts,
+            end,
+            no_pay,
+        });
+        s
+    }
+
+    /// 在岗时能摸，而且「摸了多久」是按区间算的，不是按现在几点算的。
+    #[test]
+    fn fishing_counts_the_span_not_the_clock() {
+        let s = with_fish(at(9, 30).timestamp(), None, false);
+        let r = snap_with(at(10, 0), &s);
+        assert!(r.fishing);
+        assert!(r.fish_available);
+        assert_eq!(r.fish_sec, 1_800, "9:30 开始摸到 10:00 是半小时");
+        // 白嫖金额是主账的子集：它不该比今日已赚还大
+        assert!(r.fish_milli > 0);
+        assert!(r.fish_milli <= r.amount_milli);
+    }
+
+    /// 午休 / 休息日 / 已下班都进不去，而且**每种都带自己的理由**。
+    ///
+    /// 理由不是文案装饰：按钮的气泡、快捷键的提示、右键菜单的置灰说明
+    /// 念的都是这一句，写成空串就会出现「点了没反应」。
+    #[test]
+    fn fishing_is_refused_with_a_reason() {
+        let lunch = snap_with(at(12, 30), &Settings::default());
+        assert!(!lunch.fish_available);
+        assert!(lunch.fish_reason.contains("午休"), "{}", lunch.fish_reason);
+
+        let mut weekend = Settings::default();
+        weekend.week.days = [false; 7];
+        let rest = snap_with(at(10, 0), &weekend);
+        assert!(!rest.fish_available);
+        assert!(rest.fish_reason.contains("休息"), "{}", rest.fish_reason);
+
+        let done = snap_with(at(19, 0), &Settings::default());
+        assert!(!done.fish_available);
+        assert!(done.fish_reason.contains("下班"), "{}", done.fish_reason);
+
+        let early = snap_with(at(8, 0), &Settings::default());
+        assert!(!early.fish_available);
+        assert!(early.fish_reason.contains("上班"), "{}", early.fish_reason);
+    }
+
+    /// 义务加班时段摸鱼：时长照记，钱一分都不多。
+    #[test]
+    fn fishing_during_unpaid_overtime_makes_no_money() {
+        let mut s = Settings::default();
+        s.ot_mode = OtMode::Shadow;
+        s.ot_start = Some(at(18, 0).timestamp());
+        s.fish_spans.push(settings::FishRec {
+            start: at(18, 30).timestamp(),
+            end: None,
+            no_pay: true,
+        });
+        let r = snap_with(at(19, 0), &s);
+        assert_eq!(r.state, "unpaid");
+        assert!(r.fishing);
+        assert!(r.fish_sec > 0, "时长照记");
+        assert_eq!(r.fish_milli, 0, "义务加班时段摸鱼不产生白嫖金额");
+    }
+
+    /// 收口的那一段长度不再随 now 增长——这就是「到点自动退出」的数学部分。
+    #[test]
+    fn a_closed_span_freezes_at_its_own_length() {
+        let start = at(10, 0).timestamp();
+        let end = start + 600; // 摸了 10 分钟就被收口
+        let s = with_fish(start, Some(end), false);
+        let early = snap_with(at(10, 10), &s);
+        let late = snap_with(at(11, 30), &s);
+        assert_eq!(early.fish_sec, 600);
+        assert_eq!(late.fish_sec, 600, "收口之后过多久都不再涨");
+        assert!(!late.fishing);
     }
 }

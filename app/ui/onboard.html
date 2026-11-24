@@ -31,7 +31,9 @@
   <!-- ===================== 第 1 步：工资 ===================== -->
   <section class="pane on" data-s="1">
     <div class="ph">
-      <div class="h">先告诉我你的工资</div>
+      <!-- 「装好了，还剩 3 步」是 08.2 的衔接语：安装器那扇窗刚关，这扇窗紧接着开，
+           标题要接着上一句话说，用户才不会觉得「装完又冒出一个新东西」。 -->
+      <div class="h">装好了，还剩 3 步</div>
       <div class="sub">只存本地，不上传。随时可改。</div>
     </div>
 
@@ -105,23 +107,35 @@
 
     <!-- 桌面示意区：拖的是这块小卡片，松手记下相对位置（0~1），
          点「继续」时后端按主屏工作区折算成真实像素写进 settings.win。
-         不在这里挪真的悬浮窗——它这会儿还藏着（首启没露脸）。 -->
+         不在这里挪真的悬浮窗——它这会儿还藏着（首启没露脸）。
+
+         迷你卡的宽高由 JS 按真实尺寸 1:2 写进 inline style（09 章），
+         这里只放结构；compact 档隐藏 .r2/.p/.foot，expanded 档多一行摸鱼账。 -->
     <div class="desk" id="desk">
-      <div class="hudmini" id="hudMini">
+      <div class="hudmini" id="hudMini" data-z="compact">
         <div class="r"><span>今日已赚</span><span class="b">在岗</span></div>
         <div class="a mono">288.968</div>
         <div class="r2"><span class="mono">已工作 05:53:32</span><span class="mono">79%</span></div>
         <div class="p"><i style="width:79%"></i></div>
+        <div class="foot">
+          <span>本月 <b class="mono">¥5,238</b></span>
+          <span>还剩 <b class="mono">7</b> 天</span>
+        </div>
+        <div class="fish">
+          <span>摸鱼 <b class="mono">1h23m</b></span>
+          <span class="v">白嫖 <b class="mono">¥16.56</b></span>
+        </div>
       </div>
     </div>
 
     <div class="zrow">
       <label>默认尺寸</label>
       <div class="chips" id="sizeChips">
-        <span class="chip" data-z="compact">紧凑</span>
-        <span class="chip on" data-z="standard">标准</span>
+        <span class="chip on" data-z="compact">紧凑</span>
+        <span class="chip" data-z="standard">标准</span>
         <span class="chip" data-z="expanded">展开</span>
       </div>
+      <div class="zdim" id="szDim">236 × 118</div>
     </div>
 
     <div class="swrow">

@@ -22,7 +22,7 @@
 // 所以取 `next` 的所有权，不复制。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Binding {
-    /// 回调时带回来的编号（1 = 显隐，2 = 计时，3 = 额外收入，4 = 穿透）
+    /// 回调时带回来的编号（1 = 显隐，2 = 计时，3 = 额外收入，4 = 穿透，5 = 摸鱼）
     pub id: u32,
     pub mods: u32,
     pub vk: u32,
@@ -39,6 +39,8 @@ pub const HK_SHOW: u32 = 1;
 pub const HK_CLOCK: u32 = 2;
 pub const HK_EXTRA: u32 = 3;
 pub const HK_PASSTHRU: u32 = 4;
+/// 进入 / 退出摸鱼。第五个动作，编号接着往下排（旧编号一个都不许动）。
+pub const HK_FISH: u32 = 5;
 
 /// 把 `"Ctrl+Shift+P"` 解析成 `(MOD_CONTROL|MOD_SHIFT, 'P')`。
 ///

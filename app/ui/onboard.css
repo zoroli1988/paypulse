@@ -166,6 +166,7 @@ html, body {
 /* 原型 .chip: padding 5px 12px / radius 7px / bg #0C1015 / border #2A313C */
 .chips { display: flex; flex-wrap: wrap; gap: 7px; }
 .chip {
+  position: relative;
   padding: 5px 12px;
   border-radius: 7px;
   background: var(--ink);
@@ -176,10 +177,39 @@ html, body {
   transition: .15s;
 }
 .chip:hover { border-color: #3B4552; }
+
+/* 选中态 = 绿描边 + 8% 绿底 + 右上角对勾（09 章「三重信号」）。
+   原来只有一个边框颜色差，和 hover 态几乎分不出来；加粗描边、加深底色、
+   再补一个对勾之后，色弱、低亮度屏、单色截图三种情况下都能认。 */
 .chip.on {
-  background: rgba(53, 224, 127, .12);
-  border-color: rgba(53, 224, 127, .4);
+  background: rgba(53, 224, 127, .1);
+  border-color: var(--green);
   color: var(--green);
+  font-weight: 600;
+}
+/* 对勾底：14 的绿圆，外圈 2px 用面板色，把圆从 chip 边框上「挖」出来 */
+.chip.on::after {
+  content: "";
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 0 2px var(--panel);
+}
+/* 对勾本身：必须和 ::after 的圆同一个 top/right（-5），否则对勾会落在圆外
+   ——方案里这两条写成了 0 和 -5，照抄出来是「钩子在圆的左下方」，已修。 */
+.chip.on::before {
+  content: "";
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  width: 14px;
+  height: 14px;
+  background: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23081B0F' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'><path d='M20 6L9 17l-5-5'/></svg>") center/9px no-repeat;
+  z-index: 2;
 }
 
 /* ---------- 第 1 步：绿色换算条（原型内联样式）---------- */
@@ -196,10 +226,14 @@ html, body {
 .calc b { color: var(--green); font-family: var(--mono); font-weight: 700; }
 .calc .sep { color: var(--muted); margin: 0 1px; }
 
-/* ---------- 第 3 步：桌面示意区（原型 132px / 渐变 150deg）---------- */
+/* ---------- 第 3 步：桌面示意区 ----------
+   高度从题面上的 132 提到 190：迷你卡现在按真实尺寸 1:2 变形，
+   展开档（322×330）折半是 161×165，132 根本装不下。
+   190 = 14（上留白）+ 165 + 11（下留白）。第 3 步原本富余约 100px，
+   这 58 拿来换「能看见尺寸差别」，值得。 */
 .desk {
   flex: none;
-  height: 132px;
+  height: 190px;
   border-radius: 10px;
   background: linear-gradient(150deg, #0f2a44, #0a1c2e);
   border: 1px solid #253244;
@@ -208,69 +242,90 @@ html, body {
   margin-bottom: 0;
 }
 
-/* 原型 .mini: radius 14px / padding 11px 13px 10px / bg rgba(17,19,24,.9)
-   宽度取 176 而不是 CSS 里的 max-width 196：原型那张卡在 grid 里是
-   `place-items:end` 撑内容宽度，实测渲染约 166px；写死 196 会比原型胖一圈。 */
+/* 迷你卡：宽高由 JS 写成真实尺寸的一半（118×59 / 151×121 / 161×165），
+   内部所有字号和间距乘 --k = 宽度 / 161，所以三档不是「同一张卡换个框」，
+   而是整卡等比缩放——这才是「点 chip 就看见差别」。
+   过渡曲线照 09 章：width .24s cubic-bezier(.4,0,.2,1)。 */
 .hudmini {
+  --k: 1;
   position: absolute;
   left: 14px;
   top: 14px;
-  width: 176px;
+  width: 118px;
+  height: 59px;
+  display: flex;
+  flex-direction: column;
   border-radius: 14px;
-  padding: 11px 13px 10px;
+  padding: calc(11px * var(--k)) calc(13px * var(--k)) calc(10px * var(--k));
   background: rgba(17, 19, 24, .9);
   border: 1px solid rgba(255, 255, 255, .1);
   box-shadow: 0 12px 26px -10px rgba(0, 0, 0, .7);
   cursor: grab;
+  overflow: hidden;
+  transition:
+    width .24s cubic-bezier(.4, 0, .2, 1),
+    height .24s cubic-bezier(.4, 0, .2, 1);
 }
 .hudmini:active { cursor: grabbing; }
+
+/* 紧凑档只留「今日已赚 + 金额」，和真实紧凑档一样——它是一块只报数的牌子。
+   竖排居中，否则在 59 的高度里会贴住上面一半。 */
+.hudmini[data-z="compact"] { justify-content: center; }
+.hudmini[data-z="compact"] .r2,
+.hudmini[data-z="compact"] .p,
+.hudmini[data-z="compact"] .foot,
+.hudmini[data-z="compact"] .fish { display: none; }
+.hudmini[data-z="standard"] .fish { display: none; }
+
 .hudmini .r {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  font-size: 9.5px;
+  font-size: calc(9.5px * var(--k));
   color: rgba(255, 255, 255, .45);
 }
 .hudmini .r .b {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 1.5px 7px;
+  gap: calc(4px * var(--k));
+  padding: calc(1.5px * var(--k)) calc(7px * var(--k));
   border-radius: 12px;
   background: rgba(53, 224, 127, .14);
   color: var(--green);
-  font-size: 9px;
+  font-size: calc(9px * var(--k));
   font-weight: 700;
   border: 1px solid rgba(53, 224, 127, .25);
 }
 .hudmini .r .b::before {
   content: "";
-  width: 4px; height: 4px;
+  width: calc(4px * var(--k));
+  height: calc(4px * var(--k));
   border-radius: 50%;
   background: var(--green);
 }
 .hudmini .a {
   font-family: var(--mono);
-  font-size: 27px;
+  font-size: calc(27px * var(--k));
   font-weight: 700;
   color: var(--green);
-  letter-spacing: -1.4px;
+  letter-spacing: calc(-1.4px * var(--k));
   font-variant-numeric: tabular-nums;
-  margin: 1px 0 7px;
+  line-height: 1.15;
+  margin: calc(1px * var(--k)) 0 calc(7px * var(--k));
   text-shadow: 0 0 18px rgba(53, 224, 127, .3);
 }
 .hudmini .r2 {
   display: flex;
   justify-content: space-between;
-  font-size: 8.5px;
+  font-size: calc(8.5px * var(--k));
   color: rgba(255, 255, 255, .4);
 }
 .hudmini .p {
-  height: 3px;
+  height: calc(3px * var(--k));
   border-radius: 2px;
   background: rgba(255, 255, 255, .1);
   overflow: hidden;
-  margin-top: 5px;
+  margin-top: calc(5px * var(--k));
 }
 .hudmini .p i {
   display: block;
@@ -279,6 +334,28 @@ html, body {
   background: var(--green);
 }
 
+/* 底栏和摸鱼账只在标准/展开档出现，贴着卡片底部——
+   margin-top:auto 让「多出来的高度」落在内容之间，而不是全堆在下面。 */
+.hudmini .foot {
+  display: flex;
+  justify-content: space-between;
+  margin-top: auto;
+  font-size: calc(8.5px * var(--k));
+  color: rgba(255, 255, 255, .42);
+}
+.hudmini .foot b { color: rgba(255, 255, 255, .72); font-weight: 600; }
+.hudmini .fish {
+  display: flex;
+  justify-content: space-between;
+  margin-top: calc(5px * var(--k));
+  padding-top: calc(5px * var(--k));
+  border-top: 1px solid rgba(255, 255, 255, .07);
+  font-size: calc(8.5px * var(--k));
+  color: rgba(255, 255, 255, .42);
+}
+.hudmini .fish b { color: rgba(255, 255, 255, .72); font-weight: 600; }
+.hudmini .fish .v b { color: var(--amber); }
+
 /* 第 3 步「默认尺寸」：原型 margin-top 14px / margin-bottom 6px */
 .zrow { margin-top: 14px; margin-bottom: 6px; flex: none; }
 .zrow label {
@@ -286,6 +363,15 @@ html, body {
   font-size: 11.5px;
   color: var(--text2);
   margin-bottom: 5px;
+}
+/* 尺寸数字：「紧凑」这种词没有量感，给它一个 236 × 118 才好比较 */
+.zdim {
+  margin-top: 7px;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: .3px;
+  color: rgba(255, 255, 255, .3);
+  font-variant-numeric: tabular-nums;
 }
 
 /* ---------- 开关（原型 .switch: 38×21 / radius 12px / #2A313B）---------- */
