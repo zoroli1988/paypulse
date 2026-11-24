@@ -227,7 +227,22 @@ fn unpack() -> Result<Vec<u8>, String> {
 async fn install(app: AppHandle, dir: String) -> Result<(), String> {
     let dir = normalize_dir(&dir)?;
 
-    emit(&app, 4.0, "正在创建目录…");
+    // 先收旧版本，再动新目录。顺序不能反：老进程占着主程序的固定名互斥量，
+    // 不先把它带走，装完点图标也不会有任何反应（见 legacy 模块的说明）。
+    #[cfg(windows)]
+    {
+        emit(&app, 2.0, "正在检查旧版本…");
+        let olds = legacy::find(&dir);
+        let was_running = is_running(MAIN_EXE);
+        if !olds.is_empty() {
+            emit(&app, 5.0, "正在清理旧版本…");
+        }
+        if !olds.is_empty() || was_running {
+            legacy::sweep(&olds, &dir.join(MAIN_EXE));
+        }
+    }
+
+    emit(&app, 8.0, "正在创建目录…");
     std::fs::create_dir_all(&dir).map_err(|e| {
         // 选到 C:\Program Files 之类的地方会拿到拒绝访问。说清楚下一步：
         // 用户不会想到「这是 UAC」，他只会觉得安装器坏了。
@@ -290,6 +305,12 @@ fn copy_webview_loader(dir: &Path) -> Result<(), String> {
     let Some(src_dir) = me.parent() else { return Ok(()) };
     let src = src_dir.join(DLL);
     if !src.exists() {
+        // msvc 编的包里没有这个 dll（loader 静态链进 exe 了）。但旧版是 gnu 编的，
+        // 当时装进目录的这个文件还在——现在的 exe 根本不读它，160 KB 纯属死重量。
+        let stale = dir.join(DLL);
+        if stale.exists() {
+            let _ = std::fs::remove_file(stale);
+        }
         return Ok(());
     }
     std::fs::copy(&src, dir.join(DLL)).map_err(|e| format!("写 {DLL} 失败：{e}"))?;
@@ -376,7 +397,11 @@ mod reg {
     pub type Hkey = *mut core::ffi::c_void;
 
     pub const HKEY_CURRENT_USER: Hkey = 0x8000_0001u32 as usize as Hkey;
+    pub const HKEY_LOCAL_MACHINE: Hkey = 0x8000_0002u32 as usize as Hkey;
     const KEY_WRITE: u32 = 0x20006;
+    /// KEY_READ。只读地看一眼卸载表，不需要写权限（HKLM 也读得到）。
+    const KEY_READ: u32 = 0x20019;
+    const KEY_SET_VALUE: u32 = 0x0002;
     pub const REG_SZ: u32 = 1;
     pub const REG_DWORD: u32 = 4;
 
@@ -406,6 +431,36 @@ mod reg {
         fn RegCloseKey(hkey: Hkey) -> i32;
 
         fn RegDeleteTreeW(hkey: Hkey, sub_key: *const u16) -> i32;
+
+        fn RegOpenKeyExW(
+            hkey: Hkey,
+            sub_key: *const u16,
+            options: u32,
+            sam: u32,
+            out: *mut Hkey,
+        ) -> i32;
+
+        fn RegEnumKeyExW(
+            hkey: Hkey,
+            index: u32,
+            name: *mut u16,
+            name_len: *mut u32,
+            reserved: *const u32,
+            class: *mut u16,
+            class_len: *mut u32,
+            last_write: *mut core::ffi::c_void,
+        ) -> i32;
+
+        fn RegQueryValueExW(
+            hkey: Hkey,
+            name: *const u16,
+            reserved: *const u32,
+            ty: *mut u32,
+            data: *mut u8,
+            cb: *mut u32,
+        ) -> i32;
+
+        fn RegDeleteValueW(hkey: Hkey, name: *const u16) -> i32;
     }
 
     fn wide(s: &str) -> Vec<u16> {
@@ -480,13 +535,361 @@ mod reg {
     }
 
     pub fn delete_tree(sub: &str) -> Result<(), String> {
+        delete_tree_at(HKEY_CURRENT_USER, sub)
+    }
+
+    pub fn delete_tree_at(root: Hkey, sub: &str) -> Result<(), String> {
         let w = wide(sub);
-        let rc = unsafe { RegDeleteTreeW(HKEY_CURRENT_USER, w.as_ptr()) };
+        let rc = unsafe { RegDeleteTreeW(root, w.as_ptr()) };
         // 2 = ERROR_FILE_NOT_FOUND：本来就没有，算删成功
         if rc != 0 && rc != 2 {
             return Err(format!("删注册表项失败（错误码 {rc}）"));
         }
         Ok(())
+    }
+
+    /// 只读打开一个子键。打不开就返回 None——卸载表里没有这一项。
+    pub fn open_read(root: Hkey, sub: &str) -> Option<Hkey> {
+        open_with(root, sub, KEY_READ)
+    }
+
+    /// 读 + 删值用的句柄。
+    ///
+    /// 注意不能拿 KEY_READ 的句柄去 RegDeleteValueW：注册表会返回
+    /// ERROR_ACCESS_DENIED(5)，而且是个「静默失败」——值还在，代码不报错。
+    pub fn open_rw(root: Hkey, sub: &str) -> Option<Hkey> {
+        open_with(root, sub, KEY_READ | KEY_SET_VALUE)
+    }
+
+    fn open_with(root: Hkey, sub: &str, sam: u32) -> Option<Hkey> {
+        let w = wide(sub);
+        let mut h: Hkey = std::ptr::null_mut();
+        let rc = unsafe { RegOpenKeyExW(root, w.as_ptr(), 0, sam, &mut h) };
+        if rc != 0 || h.is_null() {
+            return None;
+        }
+        Some(h)
+    }
+
+    /// 列出子键名。卸载表就是个「一家一个子键」的平表，靠这个枚举。
+    pub fn subkeys(h: Hkey) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut i = 0u32;
+        loop {
+            let mut buf = [0u16; 256];
+            let mut len = buf.len() as u32;
+            let rc = unsafe {
+                RegEnumKeyExW(
+                    h,
+                    i,
+                    buf.as_mut_ptr(),
+                    &mut len,
+                    std::ptr::null(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                )
+            };
+            // 259 = ERROR_NO_MORE_ITEMS，枚举到头了。其它错误也当结束，
+            // 少认出一个旧安装最多是留个空目录，比死循环好。
+            if rc != 0 {
+                break;
+            }
+            out.push(String::from_utf16_lossy(&buf[..len as usize]));
+            i += 1;
+        }
+        out
+    }
+
+    /// 读一个字符串值。类型不是 REG_SZ / REG_EXPAND_SZ 时按字符串尽力解释——
+    /// 卸载表里我们关心的那几个值（DisplayName、InstallLocation、UninstallString）
+    /// 都是字符串。
+    pub fn get_sz(h: Hkey, name: &str) -> Option<String> {
+        let n = wide(name);
+        let mut ty = 0u32;
+        let mut cb = 0u32;
+        let rc = unsafe {
+            RegQueryValueExW(
+                h,
+                n.as_ptr(),
+                std::ptr::null(),
+                &mut ty,
+                std::ptr::null_mut(),
+                &mut cb,
+            )
+        };
+        if rc != 0 || cb == 0 || cb > 64 * 1024 {
+            return None;
+        }
+        let mut buf = vec![0u8; cb as usize];
+        let rc = unsafe {
+            RegQueryValueExW(h, n.as_ptr(), std::ptr::null(), &mut ty, buf.as_mut_ptr(), &mut cb)
+        };
+        if rc != 0 {
+            return None;
+        }
+        let units: Vec<u16> = buf[..cb as usize]
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        let end = units.iter().position(|&c| c == 0).unwrap_or(units.len());
+        Some(String::from_utf16_lossy(&units[..end]))
+    }
+
+    /// 删一个值。删不掉（权限、不存在）不报错——调用方都在做「尽力清理」。
+    pub fn delete_value(h: Hkey, name: &str) -> bool {
+        let n = wide(name);
+        unsafe { RegDeleteValueW(h, n.as_ptr()) == 0 }
+    }
+}
+
+// ---------------------------------------------------------------- 旧版本清理
+
+/// 0.1.x 用的是 NSIS 安装器：装到 `%LOCALAPPDATA%\paypulse`，卸载项
+/// `Uninstall\paypulse`，桌面图标 `paypulse.lnk`，开机自启 `Run\paypulse`。
+/// 0.1.7 换成这个自制安装器后默认装到 `%LOCALAPPDATA%\牛马薪动了`——
+/// 两套并存留下的不是「多几个文件」，而是一个致命的死局：
+///
+/// 主程序的单实例互斥量是**固定名**（`Local\com.bydota.paypulse.single-instance`，
+/// 见 app/src-tauri/src/single.rs）。老版本还在托盘里活着，新装好的程序一启动
+/// 就认定「已经有一个在跑」，把老窗口叫到前面然后自己退出。用户看到的是：
+/// 升级完了、点了新图标、屏幕上什么都没发生。
+///
+/// 所以装之前必须把老版本收走。判据不看目录名（理论上能改），看卸载表里的
+/// DisplayName + InstallLocation；表里查不到时再退回一条已知路径，
+/// 防止注册表被清理工具扫过、文件却还在。
+#[cfg(windows)]
+mod legacy {
+    use super::{is_running, local_appdata, reg, MAIN_EXE};
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+    use std::time::{Duration, Instant};
+
+    const UNINST: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall";
+    const UNINST_WOW: &str = r"Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall";
+    const RUN: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+
+    pub struct Old {
+        dir: PathBuf,
+        /// 卸载表里的 UninstallString，可能带引号、也可能带参数。
+        uninstall: Option<String>,
+    }
+
+    /// 32 位 NSIS 安装器写 HKCU 会被 WOW64 重定向到 `WOW6432Node`，
+    /// 64 位的这个安装器写 HKCU 则落在不带 WOW 的那条路径上。
+    /// 两条都要看，否则「旧版装过、新版看不见」。
+    fn uninstall_roots() -> [(&'static str, reg::Hkey); 4] {
+        [
+            (UNINST, reg::HKEY_CURRENT_USER),
+            (UNINST_WOW, reg::HKEY_CURRENT_USER),
+            (UNINST, reg::HKEY_LOCAL_MACHINE),
+            (UNINST_WOW, reg::HKEY_LOCAL_MACHINE),
+        ]
+    }
+
+    /// 卸载表里跟这个产品有关的 DisplayName：0.1.x 是 `paypulse`，
+    /// 改名之后是 `牛马薪动了`。
+    fn is_ours(display: &str) -> bool {
+        let low = display.trim().to_lowercase();
+        low == "paypulse" || low.contains("牛马薪动了")
+    }
+
+    fn norm(p: &Path) -> String {
+        p.to_string_lossy()
+            .replace('/', "\\")
+            .trim_end_matches('\\')
+            .to_lowercase()
+    }
+
+    fn same(a: &Path, b: &Path) -> bool {
+        norm(a) == norm(b)
+    }
+
+    /// NSIS 写 InstallLocation 时是带引号的（`"$INSTDIR"`）。
+    fn unquote(s: &str) -> String {
+        let t = s.trim();
+        let t = t.strip_prefix('"').unwrap_or(t);
+        t.strip_suffix('"').unwrap_or(t).trim().to_string()
+    }
+
+    /// `"C:\a b\uninstall.exe" --uninstall` → `C:\a b\uninstall.exe`
+    fn exe_of(cmd: &str) -> Option<PathBuf> {
+        let t = cmd.trim();
+        if let Some(rest) = t.strip_prefix('"') {
+            let end = rest.find('"')?;
+            return Some(PathBuf::from(&rest[..end]));
+        }
+        // 没引号：截到 .exe 为止，路径里的空格才不会把它截断
+        let low = t.to_lowercase();
+        let cut = low.find(".exe").map(|i| i + 4).unwrap_or(t.len());
+        let p = PathBuf::from(t[..cut].trim());
+        if p.as_os_str().is_empty() {
+            None
+        } else {
+            Some(p)
+        }
+    }
+
+    /// 扫出所有该收走的旧安装（不含 target 自己）。
+    pub fn find(target: &Path) -> Vec<Old> {
+        let mut out: Vec<Old> = Vec::new();
+
+        for (sub, root) in uninstall_roots() {
+            let Some(h) = reg::open_read(root, sub) else { continue };
+            for key in reg::subkeys(h) {
+                let Some(k) = reg::open_read(h, &key) else { continue };
+                let name = reg::get_sz(k, "DisplayName").unwrap_or_default();
+                if !is_ours(&name) {
+                    reg::close(k);
+                    continue;
+                }
+                let loc = reg::get_sz(k, "InstallLocation").unwrap_or_default();
+                let uninstall = reg::get_sz(k, "QuietUninstallString")
+                    .or_else(|| reg::get_sz(k, "UninstallString"));
+                reg::close(k);
+
+                let loc = unquote(&loc);
+                let dir = if loc.is_empty() {
+                    uninstall
+                        .as_deref()
+                        .and_then(exe_of)
+                        .and_then(|p| p.parent().map(Path::to_path_buf))
+                } else {
+                    Some(PathBuf::from(loc))
+                };
+                let Some(dir) = dir else { continue };
+
+                // 同一个目录：那是「重装 / 覆盖安装」，不是旧安装，别去卸它。
+                if same(&dir, target) || out.iter().any(|o| same(&o.dir, &dir)) {
+                    continue;
+                }
+                out.push(Old { dir, uninstall });
+            }
+            reg::close(h);
+        }
+
+        // 兜底：卸载项被人清过、目录还躺着。0.1.x 的安装器把「选择安装目录」
+        // 那一页删了，路径是写死的，所以这条已知路径足够可靠。
+        let guess = local_appdata().join("paypulse");
+        if guess.join(MAIN_EXE).exists()
+            && !same(&guess, target)
+            && !out.iter().any(|o| same(&o.dir, &guess))
+        {
+            out.push(Old { dir: guess, uninstall: None });
+        }
+
+        out
+    }
+
+    /// 结束还在托盘里的 paypulse.exe。
+    ///
+    /// 这一步不能省：互斥量是固定名，老进程不走，新程序起来就自己退了。
+    /// 两种场景都要杀——升级（旧目录的进程）和覆盖安装（同一目录的旧进程，
+    /// 不杀的话 exe 正被占用，写文件会拿 ERROR_SHARING_VIOLATION）。
+    pub fn close_running() {
+        if !is_running(MAIN_EXE) {
+            return;
+        }
+        // /F 是强杀。主程序每次状态变化都落盘，丢的最多是最后几秒；
+        // 但让用户「先自己去托盘退出再装」在升级路径上是走不通的——
+        // 用户根本不知道旧图标还活着。
+        let _ = Command::new("taskkill").args(["/F", "/IM", MAIN_EXE]).output();
+        let t0 = Instant::now();
+        while is_running(MAIN_EXE) && t0.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+
+    /// 收走旧安装，并清掉那些不跟着目录走的东西（图标、自启）。返回收走了几个。
+    pub fn sweep(olds: &[Old], target_exe: &Path) -> usize {
+        close_running();
+        for old in olds {
+            retire(old);
+        }
+        clean_shortcuts();
+        clean_run(target_exe);
+        olds.len()
+    }
+
+    fn retire(old: &Old) {
+        // 先让旧卸载器干：NSIS 自己知道它还注册过什么（开始菜单文件夹、
+        // AppUserModelID、文件关联），这些从外面猜不全。
+        //
+        // `/S` 完全静默、不弹页面；它那个「同时删除应用数据」的勾选框在静默下
+        // 根本不会出现（brand.nsi:495 的 SkipIfPassive），所以用户的历史账
+        // 不会被连带删掉——升级要的正是这个。
+        if let Some(exe) = old.uninstall.as_deref().and_then(exe_of) {
+            if exe.exists() {
+                if let Ok(mut child) = Command::new(&exe).arg("/S").spawn() {
+                    let t0 = Instant::now();
+                    loop {
+                        match child.try_wait() {
+                            Ok(Some(_)) | Err(_) => break,
+                            Ok(None) => {
+                                if t0.elapsed() > Duration::from_secs(20) {
+                                    // 老卸载器卡住了（极少见）：杀掉，自己收尾。
+                                    let _ = child.kill();
+                                    break;
+                                }
+                                std::thread::sleep(Duration::from_millis(80));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 卸载器不在、起不来、或者没删干净：自己补刀。
+        // 删不掉的残留不会影响新版本运行（新目录是另一个），所以不报错。
+        for _ in 0..4 {
+            match std::fs::remove_dir_all(&old.dir) {
+                Ok(()) => break,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => break,
+                Err(_) => std::thread::sleep(Duration::from_millis(250)),
+            }
+        }
+
+        // 卸载项：卸载器活下来时自己会删，死了就得我们删。
+        for (sub, root) in uninstall_roots() {
+            let _ = reg::delete_tree_at(root, &format!(r"{sub}\paypulse"));
+        }
+        // MANUPRODUCTKEY = Software\BYDOTA\paypulse，指向旧目录。
+        let _ = reg::delete_tree(r"Software\BYDOTA\paypulse");
+    }
+
+    /// 清掉旧图标。`牛马薪动了.lnk` 随后会被 create_shortcuts 重建，
+    /// 先删后建没有副作用；而 `paypulse.lnk` 没人再建了，留着就是死链。
+    fn clean_shortcuts() {
+        let home = std::env::var_os("USERPROFILE")
+            .map(PathBuf::from)
+            .unwrap_or_default();
+        let desktop = home.join("Desktop");
+        let programs = home.join(r"AppData\Roaming\Microsoft\Windows\Start Menu\Programs");
+        for n in ["paypulse.lnk", "牛马薪动了.lnk"] {
+            let _ = std::fs::remove_file(desktop.join(n));
+            let _ = std::fs::remove_file(programs.join(n));
+        }
+        // NSIS 版会建同名开始菜单文件夹（$SMPROGRAMS\paypulse\），新安装器不建。
+        let _ = std::fs::remove_dir_all(programs.join("paypulse"));
+        let _ = std::fs::remove_dir_all(programs.join("牛马薪动了"));
+    }
+
+    /// 清掉指向旧目录的开机自启。
+    ///
+    /// 不去判断值名（`paypulse` / `PayPulse` / `牛马薪动了` 三种都可能存在），
+    /// 而是看它指向哪儿：指向即将装好的 exe 就留着——那是用户在新版设置里
+    /// 自己打开的，替他关掉就是丢设置；指向别处一律删。
+    fn clean_run(target_exe: &Path) {
+        let Some(h) = reg::open_rw(reg::HKEY_CURRENT_USER, RUN) else { return };
+        for name in ["PayPulse", "牛马薪动了"] {
+            if let Some(v) = reg::get_sz(h, name) {
+                let to_target = exe_of(&v).map_or(false, |p| same(&p, target_exe));
+                if !to_target {
+                    reg::delete_value(h, name);
+                }
+            }
+        }
+        reg::close(h);
     }
 }
 
