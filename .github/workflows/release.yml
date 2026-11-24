@@ -216,6 +216,12 @@ jobs:
           # 那样写会让 mac 用户下到一个 exe 安装器。
           python3 - "$VERSION" "${PKG_NAMES[@]}" <<'PY'
           import json, os, sys
+          from urllib.parse import quote
+
+          # 下面要打印包名，而包名现在是中文（牛马薪动了_0.1.7_x64-setup.exe）。
+          # runner 是英文 Windows，stdout 默认 cp1252，直接 print 会
+          # UnicodeEncodeError 把这个 job 打挂。
+          sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
           ver = sys.argv[1]
           names = dict(a.split("=", 1) for a in sys.argv[2:])
@@ -225,7 +231,7 @@ jobs:
           for key, pkg in m["packages"].items():
               if key not in names:
                   raise SystemExit(f"manifest 里有 {key}，但没给它配文件名")
-              pkg["url"] = f"{base}/{names[key]}"
+              pkg["url"] = f"{base}/{quote(names[key])}"
               print("  " + key + " -> " + pkg["url"])
           with open("manifest.json", "w", encoding="utf-8") as f:
               json.dump(m, f, ensure_ascii=False, indent=2)

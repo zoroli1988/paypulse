@@ -83,6 +83,11 @@ if [ -z "$PY_BIN" ]; then
   exit 1
 fi
 
+# 下面几个内联脚本会打印中文（「压缩 7.77 MB → 1.97 MB」）。CI 的 runner 是
+# 英文 Windows，python 的 stdout 默认 cp1252，打印中文直接
+# UnicodeEncodeError 把构建打挂——本机（中文 Windows / Git Bash）看不出来。
+export PYTHONIOENCODING=utf-8
+
 read_ver() { "$PY_BIN" - "$1" <<'PY'
 import json, re, sys
 p = sys.argv[1]
