@@ -110,7 +110,11 @@ VER="$APP_VER"
 
 # CI 打 tag 发版时，tag 和版本必须是同一个数——否则 Release 上挂着 v0.1.8 的
 # 标题、里面装的是 0.1.7，manifest 还会按 tag 去找 0.1.8 的包。
-if [ -n "${GITHUB_REF_NAME:-}" ] && [ "${GITHUB_REF_NAME}" != "v$VER" ]; then
+#
+# 只在 tag 构建时比。PR 和 push 到 master 时 GITHUB_REF_NAME 是 "master"，
+# 拿它跟版本号比会把每一次普通构建都判成错——本意是「tag 与版本必须一致」，
+# 不是「所有构建都得打 tag」。
+if [ "${GITHUB_REF_TYPE:-}" == "tag" ] && [ "${GITHUB_REF_NAME}" != "v$VER" ]; then
   echo "tag ${GITHUB_REF_NAME} 和版本 v$VER 对不上，拒绝构建。" >&2
   exit 1
 fi
