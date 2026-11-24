@@ -86,12 +86,20 @@ jobs:
           esac
 
       - name: 上传安装包到 Releases
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            installer/dist/*.exe
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # 不用 softprops/action-gh-release：它上传时会把文件名里的非 ASCII
+          # 前缀抹掉——v0.1.7 的资产变成了 "_0.1.7_x64-setup.exe"，Release 页面
+          # 和用户下载到的文件都看不出这是什么。gh 保留原文件名。
+          tag="$GITHUB_REF_NAME"
+          # 两个平台并发上传，release 可能还不存在：谁先到谁建。
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --title "$tag" --notes "" || true
+          fi
+          gh release upload "$tag" installer/dist/*.exe --clobber
 
   # ------------------------------------------------------------------
   # macOS 安装包（x86_64 + aarch64 通用，或分开）
@@ -120,16 +128,17 @@ jobs:
         run: cd app && npx tauri build
 
       - name: 上传安装包到 Releases
-        uses: softprops/action-gh-release@v2
-        with:
-          # 只传 dmg。`bundle/macos/*.app.tar.gz` 只有开了
-          # `bundle.createUpdaterArtifacts` 才会生成——本工程的更新是
-          # 「下载安装包、用户自己装」，不做原地替换，所以那个 glob 一直是空匹配
-          # （v0.1.4 的 Release 里就没有它）。
-          files: |
-            app/src-tauri/target/release/bundle/dmg/*.dmg
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # 同 windows job：gh 保留 dmg 的中文文件名，softprops 会抹掉前缀。
+          tag="$GITHUB_REF_NAME"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --title "$tag" --notes "" || true
+          fi
+          gh release upload "$tag" app/src-tauri/target/release/bundle/dmg/*.dmg --clobber
 
   # ------------------------------------------------------------------
   # 生成 manifest.json（签名）+ 发布
@@ -242,8 +251,6 @@ jobs:
           echo "manifest 已生成"
 
       - name: 上传 manifest 到 Releases
-        uses: softprops/action-gh-release@v2
-        with:
-          files: app/tools/make-manifest/manifest.json
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$GITHUB_REF_NAME" app/tools/make-manifest/manifest.json --clobber
