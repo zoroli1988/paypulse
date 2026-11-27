@@ -237,16 +237,17 @@ bash installer/build.sh --msvc         # 只重打安装包（复用上次的 ex
 
 **给安装器加按钮时记住这一条**：Tauri v2 的 `core:default` **不包含** `start_dragging` 和 `close`。也就是说 `data-tauri-drag-region` 写的拖标题栏、`getCurrentWindow().close()` 写的关窗，在权限没显式列出时**点了完全没反应**——界面不报错，控制台也没痕迹，代码里那两行调用明明写着。要加就加在 `installer/capabilities/default.json` 的 `permissions` 里（`core:window:allow-start-dragging` / `core:window:allow-close`）。改完这个文件必须重编安装器——`installer/build.rs` 里已经把它挂进 `rerun-if-changed`，否则 ACL 是编译期嵌进二进制的，改了不重编等于没改。
 
-裸 exe 自测还是这三条：
+裸 exe 自测还是这两条：
 
 ```bash
 cd app
 npm install               # 只装 @tauri-apps/cli，这是个零运行依赖的项目
 npm run build:no-bundle   # 只出 exe，不打包
-npm run build             # tauri build，仍会走 NSIS——但发版不再用它
 ```
 
-`src-tauri/nsis/brand.nsi` 与 `tauri.conf.json` 里的 `bundle.nsis` 段是换方案前留下的，留着只是不想让 `npm run build` 直接坏掉，别再往里加东西。
+**Windows 上的安装包只有 `installer/` 一条路**。原来那条 NSIS 路（`src-tauri/nsis/brand.nsi` + `bundle.windows.nsis`）已经删干净：它把程序装到 `%LOCALAPPDATA%\paypulse`，和自制安装器的 `%LOCALAPPDATA%\牛马薪动了` 是两个目录，而主程序的单实例互斥量是固定名——两条路并存时，升级完会出现「点了图标什么都不发生」。留着它等于留一个随时能复现的坑。
+
+`npm run build` 现在的行为：macOS 上出 dmg（`targets: ["dmg"]`），Windows 上被 `src-tauri/tauri.windows.conf.json` 的 `bundle.active: false` 关掉打包，等价于 `build:no-bundle`。发版两边都不用它。
 
 **安装位置是 `%LOCALAPPDATA%\牛马薪动了`，不是 `Program Files`**，理由三条：
 
@@ -258,7 +259,7 @@ npm run build             # tauri build，仍会走 NSIS——但发版不再用
 
 #### 装一次，验一遍
 
-> 注意：下面这个脚本还是按 NSIS 写的（找 `bundle/nsis` 下的包、用 `/S` 静默装、验卸载向导那个「删除数据」勾选框）。换成自制安装器之后它跑不通了——自制安装器没有静默安装参数，卸载也不删数据。要用它得先改成「点界面上的安装 / 调 `--uninstall`」。攒在下一轮，别以为它现在是绿的。
+> 注意：下面这个脚本**当前整体失效**，别拿它的退出码当验收结论。它按 NSIS 写的（找 `bundle/nsis` 下的包、用 `/S` 静默装、验卸载向导那个「删除数据」勾选框），而 NSIS 那条路连同 `brand.nsi` 已经删掉。断点有三处：`/S` 自制安装器不认（会让脚本挂在 `-Wait` 上）、默认产物路径变成 `installer/dist`、`$PRODUCT` / `$INSTALL_DIR` 还是老的 `%LOCALAPPDATA%\paypulse`。要修得换成「点界面上的安装 / 调 `--uninstall`」，攒在下一轮。脚本头部 `.NOTES` 里写了同样的话。
 
 配置对不对，静态看不出来。`app/tools/verify-install/verify-install.ps1` 走完 装前 → 安装 → 装后 → 卸载 → 卸后 五步，每步抓一次系统状态（注册表、目录、快捷方式）再逐项核对：
 

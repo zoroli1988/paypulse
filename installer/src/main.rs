@@ -815,9 +815,9 @@ mod legacy {
         // 先让旧卸载器干：NSIS 自己知道它还注册过什么（开始菜单文件夹、
         // AppUserModelID、文件关联），这些从外面猜不全。
         //
-        // `/S` 完全静默、不弹页面；它那个「同时删除应用数据」的勾选框在静默下
-        // 根本不会出现（brand.nsi:495 的 SkipIfPassive），所以用户的历史账
-        // 不会被连带删掉——升级要的正是这个。
+        // `/S` 完全静默、不弹页面；旧 NSIS 安装器那个「同时删除应用数据」的
+        // 勾选框在 passive 模式下整页被跳过，所以用户的历史账不会被连带删掉
+        // ——升级要的正是这个。
         if let Some(exe) = old.uninstall.as_deref().and_then(exe_of) {
             if exe.exists() {
                 if let Ok(mut child) = Command::new(&exe).arg("/S").spawn() {

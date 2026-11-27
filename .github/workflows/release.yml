@@ -52,7 +52,8 @@ jobs:
         with:
           python-version: '3.12'
 
-      # 不再 `npx tauri build`（那会走 NSIS）。安装器是自制的 Tauri 应用，
+      # 不走 `npx tauri build`：Windows 上它已经被 tauri.windows.conf.json 关掉
+      # 打包（bundle.active=false），只出裸 exe；安装包由自制安装器负责，
       # 界面、进度、卸载注册表都由它自己写，见 installer/src/main.rs 开头的说明。
       # 一条命令做完三件事：编主程序 → 压成 payload → 编安装器。
       #
@@ -143,7 +144,7 @@ jobs:
   # ------------------------------------------------------------------
   # 生成 manifest.json（签名）+ 发布
   # 依赖 Windows/macOS 编译完成，拿到 sha256 后签名。
-  # 两个平台各一个包项：Windows 是 NSIS 安装器，macOS 是 dmg。
+  # 两个平台各一个包项：Windows 是仓根 installer/ 的自制安装器，macOS 是 dmg。
   # ------------------------------------------------------------------
   manifest:
     name: 生成 manifest 并发布
@@ -188,7 +189,9 @@ jobs:
             echo "  + $1  $(basename "$2")"
           }
 
-          # Windows：优先 NSIS 的 setup.exe（MSI 要管理员权限，也不适合就地升级）
+          # Windows：自制安装器的产物名是 牛马薪动了_<ver>_x64-setup.exe。
+          # 没有 MSI 可选——`bundle.targets` 现在只剩 dmg，Windows 侧靠
+          # installer/build.sh 出包。
           EXE=$(ls "$PKG_DIR"/*_"$VERSION"_*setup.exe 2>/dev/null | head -1 || true)
           if [ -z "$EXE" ]; then
             EXE=$(ls "$PKG_DIR"/*_"$VERSION"_*.exe 2>/dev/null | head -1 || true)

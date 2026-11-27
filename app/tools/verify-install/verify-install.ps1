@@ -18,15 +18,20 @@
     指定安装包。默认取 src-tauri/target/x86_64-pc-windows-gnu/release/bundle/nsis
     下最新的那一个。
 
-.EXAMPLE
-    powershell -File app\tools\verify-install\verify-install.ps1
-    powershell -File app\tools\verify-install\verify-install.ps1 -Keep
-
 .NOTES
-    NSIS 的 /S 是静默安装，不弹任何窗。currentUser 模式（tauri.conf.json 里
-    installMode）意味着它**不写 HKLM、不要求提权**，全部落在 HKCU 与
-    %LOCALAPPDATA%\paypulse —— 所以普通权限就能跑，也正因为这样才能
-    干净地卸掉而不留系统级残渣。
+    ⚠️ 这个脚本当前**整体失效**，不要拿它的退出码当验收结论。
+
+    Windows 安装包已经换成仓根 `installer/` 的自制安装器（见 app/README.md 3.6），
+    NSIS 那条路连同 `src-tauri/nsis/brand.nsi` 一起删了。具体断在三处：
+
+    1. `-ArgumentList '/S'` 不认——自制安装器没有静默安装参数，传了它只会
+       被忽略，然后一个窗口停在那儿等用户点，脚本的 `-Wait` 直接挂住。
+    2. 安装包的默认路径 `bundle/nsis` 不会再有产物，现在是 `installer/dist`。
+    3. `$PRODUCT` / `$INSTALL_DIR` 仍按老的 `%LOCALAPPDATA%\paypulse` 写，
+       新安装器装到 `%LOCALAPPDATA%\牛马薪动了`，卸载项名也不是 `paypulse`。
+
+    要修，不是改几行字符串：得把「静默装 / 静默卸」换成「点界面安装 / 调
+    `--uninstall`」，再把路径与卸载项名对齐。攒在下一轮。
 #>
 
 [CmdletBinding()]

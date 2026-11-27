@@ -33,7 +33,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["dmg"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -46,18 +46,8 @@
     "shortDescription": "把月薪摊成每一秒",
     "longDescription": "把月薪摊成每一秒：金额每帧重算、绝不累加；双账隔离，计入月薪的和只记白干的永远分开。",
     "licenseFile": "../LICENSE",
-  "resources": {
-    "../THIRD-PARTY.md": "THIRD-PARTY.md"
-  },
-    "windows": {
-      "nsis": {
-        "installMode": "currentUser",
-        "languages": ["SimpChinese"],
-        "displayLanguageSelector": false,
-        "template": "nsis/brand.nsi",
-        "installerIcon": "icons/icon.ico",
-        "sidebarImage": "nsis/sidebar.bmp"
-      }
+    "resources": {
+      "../THIRD-PARTY.md": "THIRD-PARTY.md"
     }
   }
 }
